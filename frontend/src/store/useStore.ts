@@ -1,7 +1,12 @@
 import { create } from 'zustand';
-import { GraphData, Node, FilterOptions, ViewMode, ProcessingStatus } from '@/types';
+import { GraphData, Node, FilterOptions, ViewMode, ProcessingStatus, ProjectInfo, PDFMetadata } from '@/types';
 
 interface AppState {
+  // Project and PDF data
+  currentProject: ProjectInfo | null;
+  pdfs: PDFMetadata[];
+  selectedPdfIds: Set<string>;
+  
   // Graph data
   graphData: GraphData | null;
   filteredGraphData: GraphData | null;
@@ -26,6 +31,10 @@ interface AppState {
   analyticsOpen: boolean;
   
   // Actions
+  setCurrentProject: (project: ProjectInfo | null) => void;
+  setPdfs: (pdfs: PDFMetadata[]) => void;
+  togglePdfSelection: (documentId: string) => void;
+  setSelectedPdfIds: (ids: Set<string>) => void;
   setGraphData: (data: GraphData | null) => void;
   setFilteredGraphData: (data: GraphData | null) => void;
   setSelectedNode: (node: Node | null) => void;
@@ -55,6 +64,9 @@ const initialViewMode: ViewMode = {
 
 export const useStore = create<AppState>((set) => ({
   // Initial state
+  currentProject: null,
+  pdfs: [],
+  selectedPdfIds: new Set(),
   graphData: null,
   filteredGraphData: null,
   selectedNode: null,
@@ -68,6 +80,25 @@ export const useStore = create<AppState>((set) => ({
   analyticsOpen: false,
 
   // Actions
+  setCurrentProject: (project) => set({ currentProject: project }),
+  
+  setPdfs: (pdfs) => {
+    const selectedIds = new Set(pdfs.filter(pdf => pdf.selected).map(pdf => pdf.document_id));
+    set({ pdfs, selectedPdfIds: selectedIds });
+  },
+  
+  togglePdfSelection: (documentId) => set((state) => {
+    const newSelectedIds = new Set(state.selectedPdfIds);
+    if (newSelectedIds.has(documentId)) {
+      newSelectedIds.delete(documentId);
+    } else {
+      newSelectedIds.add(documentId);
+    }
+    return { selectedPdfIds: newSelectedIds };
+  }),
+  
+  setSelectedPdfIds: (ids) => set({ selectedPdfIds: ids }),
+  
   setGraphData: (data) => {
     console.log('Store setGraphData called with:', {
       hasData: !!data,
@@ -137,6 +168,9 @@ export const useStore = create<AppState>((set) => ({
   
   reset: () =>
     set({
+      currentProject: null,
+      pdfs: [],
+      selectedPdfIds: new Set(),
       graphData: null,
       filteredGraphData: null,
       selectedNode: null,

@@ -12,6 +12,8 @@ import {
 import { useStore } from '@/store/useStore';
 import { ENTITY_COLORS, ENTITY_LABELS, EntityType } from '@/types';
 import { apiService } from '@/services/api';
+import { PDFSelector } from './PDFSelector';
+import toast from 'react-hot-toast';
 
 export function Sidebar() {
   const {
@@ -24,6 +26,7 @@ export function Sidebar() {
     filteredGraphData,
     graphData,
     toggleAnalytics,
+    currentProject,
   } = useStore();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -93,6 +96,11 @@ export function Sidebar() {
             </p>
           </div>
 
+          {/* PDF Selector */}
+          <div className="mb-6">
+            <PDFSelector />
+          </div>
+
           {/* Search */}
           <div className="mb-6">
             <label className="block text-sm font-medium text-gray-300 mb-2">
@@ -125,7 +133,7 @@ export function Sidebar() {
                     : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
                 }`}
               >
-                <Box className="w-4 h-4 inline mr-2" />
+                <BoxSelect className="w-4 h-4 inline mr-2" />
                 2D
               </button>
               <button
@@ -136,7 +144,7 @@ export function Sidebar() {
                     : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
                 }`}
               >
-                <BoxSelect className="w-4 h-4 inline mr-2" />
+                <Box className="w-4 h-4 inline mr-2" />
                 3D
               </button>
             </div>
@@ -267,34 +275,27 @@ export function Sidebar() {
             <div className="flex gap-2">
               <button
                 onClick={async () => {
-                  if (!filteredGraphData) return;
+                  if (!currentProject) {
+                    toast.error('No project loaded');
+                    return;
+                  }
                   
-                  // Normalize edges to ensure source/target are strings, not objects
-                  const normalizedGraph = {
-                    ...filteredGraphData,
-                    edges: filteredGraphData.edges.map(edge => ({
-                      ...edge,
-                      source: typeof edge.source === 'string' ? edge.source : (edge.source as any)?.id || edge.source,
-                      target: typeof edge.target === 'string' ? edge.target : (edge.target as any)?.id || edge.target,
-                    }))
-                  };
-                  
-                  console.log('Exporting normalized graph:', {
-                    nodes: normalizedGraph.nodes.length,
-                    edges: normalizedGraph.edges.length,
-                    sampleEdge: normalizedGraph.edges[0]
-                  });
-                  
-                  const projectData = await apiService.exportProject(normalizedGraph, 'Synapse_Project');
-                  const blob = new Blob([JSON.stringify(projectData, null, 2)], { type: 'application/json' });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement('a');
-                  a.href = url;
-                  a.download = `synapse_project_${Date.now()}.json`;
-                  a.click();
-                  URL.revokeObjectURL(url);
+                  try {
+                    const projectData = await apiService.exportProject(currentProject.project_id);
+                    const blob = new Blob([JSON.stringify(projectData, null, 2)], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `${currentProject.name}_${Date.now()}.json`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    toast.success('Project exported successfully!');
+                  } catch (error) {
+                    console.error('Export failed:', error);
+                    toast.error('Export failed');
+                  }
                 }}
-                disabled={!filteredGraphData}
+                disabled={!currentProject}
                 className="flex-1 text-xs px-2 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded text-white"
               >
                 Export
@@ -310,36 +311,32 @@ export function Sidebar() {
                     try {
                       const text = await file.text();
                       const data = JSON.parse(text);
-                      console.log('Sidebar import - raw data:', data);
+                      console.log('Importing project:', data);
                       
                       const res = await apiService.importProject(data);
-                      console.log('Sidebar import - API response:', res);
+                      console.log('Import response:', res);
                       
-                      if (res.graph) {
-                        // Normalize graph data to ensure edges have string IDs
-                        const normalizedGraph = {
-                          ...res.graph,
-                          edges: res.graph.edges.map((edge: any) => ({
-                            ...edge,
-                            source: typeof edge.source === 'string' ? edge.source : edge.source?.id || edge.source,
-                            target: typeof edge.target === 'string' ? edge.target : edge.target?.id || edge.target,
-                          }))
-                        };
+                      if (res.project_id) {
+                        // Load the newly imported project
+                        const projects = await apiService.listProjects();
+                        const importedProject = projects.find(p => p.project_id === res.project_id);
                         
-                        console.log('Sidebar import - normalized:', {
-                          nodes: normalizedGraph.nodes.length,
-                          edges: normalizedGraph.edges.length,
-                          sampleEdge: normalizedGraph.edges[0]
-                        });
-                        
-                        useStore.getState().setGraphData(normalizedGraph);
-                        alert(`Imported ${normalizedGraph.nodes?.length || 0} nodes, ${normalizedGraph.edges?.length || 0} edges`);
+                        if (importedProject) {
+                          useStore.getState().setCurrentProject(importedProject);
+                          useStore.getState().setPdfs(importedProject.pdfs);
+                          
+                          // Load the graph
+                          const graph = await apiService.getProjectGraph(res.project_id, true);
+                          useStore.getState().setGraphData(graph);
+                          
+                          toast.success(`Imported project with ${res.pdf_count} PDFs!`);
+                        }
                       } else {
-                        alert('Import failed: No graph data');
+                        toast.error('Import failed: No project created');
                       }
                     } catch (error: any) {
-                      console.error('Sidebar import error:', error);
-                      alert(`Import error: ${error.message}`);
+                      console.error('Import error:', error);
+                      toast.error(`Import error: ${error.message}`);
                     }
                   };
                   input.click();

@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { GraphData, ProcessingStatus, GraphAnalytics } from '@/types';
+import { GraphData, ProcessingStatus, GraphAnalytics, ProjectInfo, PDFMetadata } from '@/types';
 
 const API_BASE_URL = (import.meta as any).env?.VITE_API_URL || 'http://localhost:8000';
 
@@ -133,21 +133,79 @@ export const apiService = {
   },
 
   /**
-   * Export current graph as project
+   * List all projects
    */
-  async exportProject(graph: GraphData, projectName: string) {
-    return {
-      project_name: projectName,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      graph,
-      sources: [],
-      settings: {},
-    };
+  async listProjects(): Promise<ProjectInfo[]> {
+    const response = await api.get<ProjectInfo[]>('/api/projects');
+    return response.data;
   },
 
   /**
-   * Import project
+   * Get PDFs for a specific project
+   */
+  async getProjectPdfs(projectId: string): Promise<PDFMetadata[]> {
+    const response = await api.get<PDFMetadata[]>(`/api/projects/${projectId}/pdfs`);
+    return response.data;
+  },
+
+  /**
+   * Update PDF selection for a project
+   */
+  async updatePdfSelection(projectId: string, selectedDocumentIds: string[]) {
+    const response = await api.post(`/api/projects/${projectId}/select-pdfs`, selectedDocumentIds);
+    return response.data;
+  },
+
+  /**
+   * Add PDFs to an existing project
+   */
+  async addPdfsToProject(projectId: string, files: File[]): Promise<ProcessingStatus> {
+    const formData = new FormData();
+    files.forEach((file) => {
+      formData.append('files', file);
+    });
+
+    const response = await api.post<ProcessingStatus>(
+      `/api/projects/${projectId}/pdfs`,
+      formData,
+      {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      }
+    );
+
+    return response.data;
+  },
+
+  /**
+   * Delete a PDF from a project
+   */
+  async deletePdfFromProject(projectId: string, documentId: string) {
+    const response = await api.delete(`/api/projects/${projectId}/pdfs/${documentId}`);
+    return response.data;
+  },
+
+  /**
+   * Get merged graph from selected PDFs
+   */
+  async getProjectGraph(projectId: string, selectedOnly = true): Promise<GraphData> {
+    const response = await api.get<GraphData>(`/api/projects/${projectId}/graph`, {
+      params: { selected_only: selectedOnly }
+    });
+    return response.data;
+  },
+
+  /**
+   * Export project with all PDF graphs
+   */
+  async exportProject(projectId: string) {
+    const response = await api.get(`/api/projects/${projectId}/export`);
+    return response.data;
+  },
+
+  /**
+   * Import project with PDF graphs
    */
   async importProject(projectData: any) {
     const response = await api.post('/api/projects/import', {

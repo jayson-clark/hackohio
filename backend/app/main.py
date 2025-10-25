@@ -14,9 +14,11 @@ from app.models import (
     GraphAnalytics,
     ProcessingStatus,
     ProjectMetadata,
+    PDFMetadata,
     init_db,
     get_db,
     Project,
+    SessionLocal,
 )
 from app.services import (
     PDFProcessor,
@@ -132,13 +134,16 @@ async def process_pdfs(
     # Create job ID
     job_id = str(uuid.uuid4())
     
-    # Save uploaded files
-    saved_paths = []
+    # Save uploaded files with metadata
+    saved_files = []
     for file in files:
         file_path = UPLOAD_DIR / f"{job_id}_{file.filename}"
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-        saved_paths.append(str(file_path))
+        saved_files.append({
+            "path": str(file_path),
+            "original_name": file.filename
+        })
     
     # Initialize job status
     processing_jobs[job_id] = ProcessingStatus(
@@ -152,7 +157,7 @@ async def process_pdfs(
     background_tasks.add_task(
         process_pdfs_background,
         job_id,
-        saved_paths,
+        saved_files,
         project_name or f"Project_{job_id[:8]}"
     )
     
@@ -161,82 +166,151 @@ async def process_pdfs(
 
 async def process_pdfs_background(
     job_id: str,
-    pdf_paths: List[str],
+    pdf_files: List[dict],  # Now receives list of {path, original_name}
     project_name: str
 ):
-    """Background task to process PDFs"""
+    """Background task to process PDFs - creates individual graph for each PDF"""
+    from app.models.database import Project, Document, PDFGraphNode, PDFGraphEdge
+    from sqlalchemy.orm import Session
+    
+    db = SessionLocal()
     try:
-        # Update status
+        # Create or get project
+        project = db.query(Project).filter(Project.name == project_name).first()
+        if not project:
+            project = Project(
+                id=str(uuid.uuid4()),
+                name=project_name,
+                description=f"Project with {len(pdf_files)} PDFs"
+            )
+            db.add(project)
+            db.commit()
+        
         processing_jobs[job_id].status = "processing"
-        processing_jobs[job_id].progress = 0.1
-        processing_jobs[job_id].message = "Extracting text from PDFs..."
+        processing_jobs[job_id].progress = 0.0
+        processing_jobs[job_id].message = "Processing PDFs individually..."
         
-        # Step 1: Extract text from PDFs
-        pdf_results = pdf_processor.process_pdfs(pdf_paths)
-        processing_jobs[job_id].progress = 0.3
-        processing_jobs[job_id].message = f"Extracted text from {len(pdf_results)} PDFs"
+        pdf_graphs = []
+        total_pdfs = len(pdf_files)
         
-        # Combine all sentences
-        all_sentences = []
-        for result in pdf_results:
-            if "sentences" in result:
-                all_sentences.extend(result["sentences"])
+        # Process each PDF individually
+        for idx, pdf_file in enumerate(pdf_files):
+            pdf_path = pdf_file["path"]
+            original_name = pdf_file["original_name"]
+            base_progress = idx / total_pdfs
+            progress_step = 1.0 / total_pdfs
+            
+            processing_jobs[job_id].message = f"Processing PDF {idx + 1}/{total_pdfs}: {original_name}"
+            processing_jobs[job_id].progress = base_progress
+            
+            # Create document record with original filename
+            doc_id = str(uuid.uuid4())
+            document = Document(
+                id=doc_id,
+                project_id=project.id,
+                filename=original_name,  # Use original filename for display
+                file_path=pdf_path,  # Keep full path for file access
+                processed=0,
+                selected=1
+            )
+            db.add(document)
+            db.commit()
+            
+            try:
+                # Extract text from this PDF
+                pdf_result = pdf_processor.process_pdfs([pdf_path])[0]
+                
+                if "error" in pdf_result:
+                    document.processed = -1
+                    db.commit()
+                    continue
+                
+                sentences = pdf_result.get("sentences", [])
+                
+                # Extract entities for this PDF
+                sentence_entities = ner_service.extract_entities_from_sentences(sentences)
+                filtered_entities = ner_service.filter_entities(sentence_entities)
+                unique_entities = ner_service.get_unique_entities(filtered_entities)
+                
+                # Extract relationships for this PDF
+                relationships = relationship_extractor.extract_all_relationships(filtered_entities)
+                
+                # Build graph for this PDF
+                pdf_graph = graph_builder.build_graph(unique_entities, relationships)
+                
+                # Save nodes to database
+                for node in pdf_graph.nodes:
+                    pdf_node = PDFGraphNode(
+                        document_id=doc_id,
+                        entity_id=node.id,
+                        entity_type=node.group.value,
+                        count=node.metadata.get("count", 1),
+                        degree=node.value
+                    )
+                    db.add(pdf_node)
+                
+                # Save edges to database
+                for edge in pdf_graph.edges:
+                    pdf_edge = PDFGraphEdge(
+                        document_id=doc_id,
+                        source_id=edge.source,
+                        target_id=edge.target,
+                        weight=edge.value,
+                        evidence=edge.metadata.get("all_evidence", []),
+                        relationship_type=edge.metadata.get("relationship_type", "CO_OCCURRENCE")
+                    )
+                    db.add(pdf_edge)
+                
+                document.processed = 1
+                db.commit()
+                
+                pdf_graphs.append(pdf_graph)
+                
+                print(f"✓ Processed {original_name}: {len(pdf_graph.nodes)} nodes, {len(pdf_graph.edges)} edges")
+                
+            except Exception as e:
+                print(f"✗ Error processing {original_name}: {e}")
+                document.processed = -1
+                db.commit()
         
-        # Step 2: Extract entities using NER
-        processing_jobs[job_id].progress = 0.4
-        processing_jobs[job_id].message = "Extracting biomedical entities..."
-        
-        print(f"DEBUG: Total sentences to process: {len(all_sentences)}")
-        sentence_entities = ner_service.extract_entities_from_sentences(all_sentences)
-        print(f"DEBUG: Sentences with entities: {len(sentence_entities)}")
-        
-        filtered_entities = ner_service.filter_entities(sentence_entities)
-        print(f"DEBUG: After filtering: {len(filtered_entities)} sentences")
-        
-        unique_entities = ner_service.get_unique_entities(filtered_entities)
-        print(f"DEBUG: Unique entities found: {len(unique_entities)}")
-        print(f"DEBUG: Entity names: {list(unique_entities.keys())[:10]}")
-        
-        processing_jobs[job_id].progress = 0.6
-        processing_jobs[job_id].message = f"Found {len(unique_entities)} unique entities"
-        
-        # Step 3: Extract relationships
-        processing_jobs[job_id].progress = 0.7
-        processing_jobs[job_id].message = "Extracting relationships..."
-        
-        relationships = relationship_extractor.extract_all_relationships(filtered_entities)
-        print(f"DEBUG: Relationships found: {len(relationships)}")
-        
-        processing_jobs[job_id].progress = 0.8
-        processing_jobs[job_id].message = f"Found {len(relationships)} relationships"
-        
-        # Step 4: Build graph
-        processing_jobs[job_id].progress = 0.9
-        processing_jobs[job_id].message = "Building knowledge graph..."
-        
-        graph_data = graph_builder.build_graph(unique_entities, relationships)
-        
-        # Step 5: Compute analytics
-        analytics = graph_builder.compute_analytics()
-        graph_data.metadata["analytics"] = analytics.dict()
+        # Merge all PDF graphs for the initial result
+        if pdf_graphs:
+            processing_jobs[job_id].message = "Merging graphs..."
+            processing_jobs[job_id].progress = 0.95
+            
+            merged_graph = pdf_graphs[0]
+            for pdf_graph in pdf_graphs[1:]:
+                # Extract entities and relationships for merging
+                base_entities = {n.id: {"original_name": n.id, "type": n.group.value, "count": n.metadata.get("count", 1)} for n in merged_graph.nodes}
+                base_rels = [{"source": e.source, "target": e.target, "weight": e.value, "evidence": e.metadata.get("all_evidence", []), "relationship_type": e.metadata.get("relationship_type", "CO_OCCURRENCE")} for e in merged_graph.edges]
+                
+                new_entities = {n.id: {"original_name": n.id, "type": n.group.value, "count": n.metadata.get("count", 1)} for n in pdf_graph.nodes}
+                new_rels = [{"source": e.source, "target": e.target, "weight": e.value, "evidence": e.metadata.get("all_evidence", []), "relationship_type": e.metadata.get("relationship_type", "CO_OCCURRENCE")} for e in pdf_graph.edges]
+                
+                merged_graph = graph_builder.merge_graphs(base_entities, base_rels, new_entities, new_rels)
+            
+            processing_jobs[job_id].result = merged_graph
         
         # Complete
         processing_jobs[job_id].status = "completed"
         processing_jobs[job_id].progress = 1.0
-        processing_jobs[job_id].message = "Processing complete!"
-        processing_jobs[job_id].result = graph_data
-        
-        # Cleanup uploaded files
-        for path in pdf_paths:
-            try:
-                os.remove(path)
-            except:
-                pass
+        processing_jobs[job_id].message = f"Processed {total_pdfs} PDFs successfully!"
+        processing_jobs[job_id].result.metadata["project_id"] = project.id
         
     except Exception as e:
         processing_jobs[job_id].status = "failed"
         processing_jobs[job_id].message = f"Error: {str(e)}"
         print(f"Processing error for job {job_id}: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        db.close()
+        # Don't cleanup uploaded files anymore since we keep them
+        # for path in pdf_paths:
+        #     try:
+        #         os.remove(path)
+        #     except:
+        #         pass
 
 
 @app.get("/api/status/{job_id}", response_model=ProcessingStatus)
@@ -321,22 +395,372 @@ async def compute_graph_analytics(graph_data: GraphData):
 
 @app.get("/api/projects", response_model=List[ProjectMetadata])
 async def list_projects(db: Session = Depends(get_db)):
-    """List all saved projects"""
+    """List all saved projects with PDF metadata"""
+    from app.models.database import Document, PDFGraphNode, PDFGraphEdge
+    from collections import Counter
+    
     projects = db.query(Project).all()
     
-    return [
-        ProjectMetadata(
+    result = []
+    for p in projects:
+        pdfs = []
+        for doc in p.documents:
+            # Count entities by type for this PDF
+            entity_counts = Counter()
+            for node in doc.pdf_nodes:
+                entity_counts[node.entity_type] += 1
+            
+            pdfs.append(PDFMetadata(
+                document_id=doc.id,
+                filename=doc.filename,
+                uploaded_at=doc.uploaded_at.isoformat(),
+                processed=doc.processed == 1,
+                selected=doc.selected == 1,
+                node_count=len(doc.pdf_nodes),
+                edge_count=len(doc.pdf_edges),
+                entity_counts=dict(entity_counts)
+            ))
+        
+        result.append(ProjectMetadata(
             project_id=p.id,
             name=p.name,
             description=p.description,
             created_at=p.created_at.isoformat(),
             updated_at=p.updated_at.isoformat(),
             pdf_count=len(p.documents),
-            node_count=len(p.graph_nodes),
-            edge_count=len(p.graph_edges),
-        )
-        for p in projects
-    ]
+            pdfs=pdfs
+        ))
+    
+    return result
+
+
+@app.get("/api/projects/{project_id}/pdfs", response_model=List[PDFMetadata])
+async def get_project_pdfs(project_id: str, db: Session = Depends(get_db)):
+    """Get all PDFs for a specific project"""
+    from app.models.database import Document
+    from collections import Counter
+    
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    pdfs = []
+    for doc in project.documents:
+        entity_counts = Counter()
+        for node in doc.pdf_nodes:
+            entity_counts[node.entity_type] += 1
+        
+        pdfs.append(PDFMetadata(
+            document_id=doc.id,
+            filename=doc.filename,
+            uploaded_at=doc.uploaded_at.isoformat(),
+            processed=doc.processed == 1,
+            selected=doc.selected == 1,
+            node_count=len(doc.pdf_nodes),
+            edge_count=len(doc.pdf_edges),
+            entity_counts=dict(entity_counts)
+        ))
+    
+    return pdfs
+
+
+@app.post("/api/projects/{project_id}/select-pdfs")
+async def update_pdf_selection(
+    project_id: str,
+    selected_document_ids: List[str],
+    db: Session = Depends(get_db)
+):
+    """Update which PDFs are selected for graph visualization"""
+    from app.models.database import Document
+    
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Update all documents - set selected=0 for all, then selected=1 for selected ones
+    for doc in project.documents:
+        doc.selected = 1 if doc.id in selected_document_ids else 0
+    
+    db.commit()
+    
+    return {"status": "success", "selected_count": len(selected_document_ids)}
+
+
+@app.post("/api/projects/{project_id}/pdfs")
+async def add_pdfs_to_project(
+    project_id: str,
+    background_tasks: BackgroundTasks,
+    files: List[UploadFile] = File(...),
+    db: Session = Depends(get_db)
+):
+    """Add more PDFs to an existing project"""
+    from app.models.database import Document, PDFGraphNode, PDFGraphEdge
+    
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Validate files
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided")
+    
+    for file in files:
+        if not file.filename.endswith('.pdf'):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid file type: {file.filename}. Only PDF files are supported."
+            )
+    
+    # Create job ID for tracking
+    job_id = str(uuid.uuid4())
+    
+    # Save uploaded files with metadata
+    saved_files = []
+    for file in files:
+        file_path = UPLOAD_DIR / f"{job_id}_{file.filename}"
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        saved_files.append({
+            "path": str(file_path),
+            "original_name": file.filename
+        })
+    
+    # Initialize job status
+    processing_jobs[job_id] = ProcessingStatus(
+        job_id=job_id,
+        status="pending",
+        progress=0.0,
+        message="Queued for processing"
+    )
+    
+    # Start background processing for these new PDFs
+    background_tasks.add_task(
+        add_pdfs_to_project_background,
+        job_id,
+        project_id,
+        saved_files,
+        db
+    )
+    
+    return processing_jobs[job_id]
+
+
+async def add_pdfs_to_project_background(
+    job_id: str,
+    project_id: str,
+    pdf_files: List[dict],  # Now receives list of {path, original_name}
+    db_session
+):
+    """Background task to add PDFs to existing project"""
+    from app.models.database import Project, Document, PDFGraphNode, PDFGraphEdge
+    
+    db = SessionLocal()
+    try:
+        project = db.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            processing_jobs[job_id].status = "failed"
+            processing_jobs[job_id].message = "Project not found"
+            return
+        
+        processing_jobs[job_id].status = "processing"
+        processing_jobs[job_id].progress = 0.0
+        processing_jobs[job_id].message = "Processing new PDFs..."
+        
+        total_pdfs = len(pdf_files)
+        
+        # Process each PDF individually
+        for idx, pdf_file in enumerate(pdf_files):
+            pdf_path = pdf_file["path"]
+            original_name = pdf_file["original_name"]
+            base_progress = idx / total_pdfs
+            
+            processing_jobs[job_id].message = f"Processing PDF {idx + 1}/{total_pdfs}: {original_name}"
+            processing_jobs[job_id].progress = base_progress
+            
+            # Create document record with original filename
+            doc_id = str(uuid.uuid4())
+            document = Document(
+                id=doc_id,
+                project_id=project.id,
+                filename=original_name,  # Use original filename for display
+                file_path=pdf_path,  # Keep full path for file access
+                processed=0,
+                selected=1
+            )
+            db.add(document)
+            db.commit()
+            
+            try:
+                # Extract text from this PDF
+                pdf_result = pdf_processor.process_pdfs([pdf_path])[0]
+                
+                if "error" in pdf_result:
+                    document.processed = -1
+                    db.commit()
+                    continue
+                
+                sentences = pdf_result.get("sentences", [])
+                
+                # Extract entities for this PDF
+                sentence_entities = ner_service.extract_entities_from_sentences(sentences)
+                filtered_entities = ner_service.filter_entities(sentence_entities)
+                unique_entities = ner_service.get_unique_entities(filtered_entities)
+                
+                # Extract relationships for this PDF
+                relationships = relationship_extractor.extract_all_relationships(filtered_entities)
+                
+                # Build graph for this PDF
+                pdf_graph = graph_builder.build_graph(unique_entities, relationships)
+                
+                # Save nodes to database
+                for node in pdf_graph.nodes:
+                    pdf_node = PDFGraphNode(
+                        document_id=doc_id,
+                        entity_id=node.id,
+                        entity_type=node.group.value,
+                        count=node.metadata.get("count", 1),
+                        degree=node.value
+                    )
+                    db.add(pdf_node)
+                
+                # Save edges to database
+                for edge in pdf_graph.edges:
+                    pdf_edge = PDFGraphEdge(
+                        document_id=doc_id,
+                        source_id=edge.source,
+                        target_id=edge.target,
+                        weight=edge.value,
+                        evidence=edge.metadata.get("all_evidence", []),
+                        relationship_type=edge.metadata.get("relationship_type", "CO_OCCURRENCE")
+                    )
+                    db.add(pdf_edge)
+                
+                document.processed = 1
+                db.commit()
+                
+                print(f"✓ Processed {original_name}: {len(pdf_graph.nodes)} nodes, {len(pdf_graph.edges)} edges")
+                
+            except Exception as e:
+                print(f"✗ Error processing {original_name}: {e}")
+                document.processed = -1
+                db.commit()
+        
+        # Complete
+        processing_jobs[job_id].status = "completed"
+        processing_jobs[job_id].progress = 1.0
+        processing_jobs[job_id].message = f"Added {total_pdfs} PDFs successfully!"
+        
+    except Exception as e:
+        processing_jobs[job_id].status = "failed"
+        processing_jobs[job_id].message = f"Error: {str(e)}"
+        print(f"Processing error for job {job_id}: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        db.close()
+
+
+@app.delete("/api/projects/{project_id}/pdfs/{document_id}")
+async def delete_pdf_from_project(
+    project_id: str,
+    document_id: str,
+    db: Session = Depends(get_db)
+):
+    """Delete a PDF and its graph data from a project"""
+    from app.models.database import Document
+    
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    document = db.query(Document).filter(
+        Document.id == document_id,
+        Document.project_id == project_id
+    ).first()
+    
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Delete the document (cascade will delete nodes and edges)
+    filename = document.filename
+    db.delete(document)
+    db.commit()
+    
+    return {"status": "success", "message": f"Deleted {filename}"}
+
+
+@app.get("/api/projects/{project_id}/graph", response_model=GraphData)
+async def get_project_graph(
+    project_id: str,
+    selected_only: bool = True,
+    db: Session = Depends(get_db)
+):
+    """Get the merged graph from selected PDFs (or all PDFs if selected_only=False)"""
+    from app.models.database import Document, PDFGraphNode, PDFGraphEdge
+    
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Get documents to include
+    documents = [doc for doc in project.documents if doc.processed == 1]
+    if selected_only:
+        documents = [doc for doc in documents if doc.selected == 1]
+    
+    if not documents:
+        return GraphData(nodes=[], edges=[], metadata={"project_id": project_id, "message": "No PDFs selected or processed"})
+    
+    # Build individual graphs for each PDF
+    pdf_graphs = []
+    for doc in documents:
+        # Reconstruct graph from database
+        nodes = []
+        for node in doc.pdf_nodes:
+            from app.models.schemas import Node, EntityType
+            nodes.append(Node(
+                id=node.entity_id,
+                group=EntityType(node.entity_type),
+                value=node.degree,
+                metadata={"count": node.count, "degree": node.degree, "source_pdf": doc.filename}
+            ))
+        
+        edges = []
+        for edge in doc.pdf_edges:
+            from app.models.schemas import Edge
+            edges.append(Edge(
+                source=edge.source_id,
+                target=edge.target_id,
+                value=edge.weight,
+                title=edge.evidence[0] if edge.evidence else "",
+                metadata={
+                    "all_evidence": edge.evidence,
+                    "relationship_type": edge.relationship_type,
+                    "source_pdf": doc.filename
+                }
+            ))
+        
+        pdf_graphs.append(GraphData(nodes=nodes, edges=edges, metadata={"source": doc.filename}))
+    
+    # Merge all graphs
+    if len(pdf_graphs) == 1:
+        merged = pdf_graphs[0]
+    else:
+        merged = pdf_graphs[0]
+        for pdf_graph in pdf_graphs[1:]:
+            # Convert to dict format for merging
+            base_entities = {n.id: {"original_name": n.id, "type": n.group.value, "count": n.metadata.get("count", 1)} for n in merged.nodes}
+            base_rels = [{"source": e.source, "target": e.target, "weight": e.value, "evidence": e.metadata.get("all_evidence", []), "relationship_type": e.metadata.get("relationship_type", "CO_OCCURRENCE")} for e in merged.edges]
+            
+            new_entities = {n.id: {"original_name": n.id, "type": n.group.value, "count": n.metadata.get("count", 1)} for n in pdf_graph.nodes}
+            new_rels = [{"source": e.source, "target": e.target, "weight": e.value, "evidence": e.metadata.get("all_evidence", []), "relationship_type": e.metadata.get("relationship_type", "CO_OCCURRENCE")} for e in pdf_graph.edges]
+            
+            merged = graph_builder.merge_graphs(base_entities, base_rels, new_entities, new_rels)
+    
+    merged.metadata["project_id"] = project_id
+    merged.metadata["pdf_count"] = len(documents)
+    merged.metadata["selected_pdfs"] = [doc.filename for doc in documents]
+    
+    return merged
 
 
 # ==== Conversational Agent Endpoints ====
@@ -514,45 +938,60 @@ async def ner_preview(req: NerPreviewRequest):
 
 # ==== Project Export/Import Endpoints ====
 
-@app.get("/api/projects/{project_id}/export", response_model=ProjectExport)
+@app.get("/api/projects/{project_id}/export")
 async def export_project(project_id: str, db: Session = Depends(get_db)):
-    """Export a project as JSON"""
+    """Export a project with all individual PDF graphs as JSON"""
+    from app.models.schemas import PDFGraphExport, Node, Edge, EntityType
+    
     try:
         project = db.query(Project).filter(Project.id == project_id).first()
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
         
-        # Reconstruct graph from database
-        nodes = []
-        for gn in project.graph_nodes:
-            nodes.append({
-                "id": gn.entity_id,
-                "group": gn.entity_type,
-                "value": gn.degree,
-                "metadata": {"count": gn.count, "degree": gn.degree}
-            })
+        pdf_graphs = []
+        for doc in project.documents:
+            if doc.processed != 1:
+                continue
+            
+            # Build graph for this PDF
+            nodes = []
+            for node in doc.pdf_nodes:
+                nodes.append(Node(
+                    id=node.entity_id,
+                    group=EntityType(node.entity_type),
+                    value=node.degree,
+                    metadata={"count": node.count, "degree": node.degree}
+                ))
+            
+            edges = []
+            for edge in doc.pdf_edges:
+                edges.append(Edge(
+                    source=edge.source_id,
+                    target=edge.target_id,
+                    value=edge.weight,
+                    title=edge.evidence[0] if edge.evidence else "",
+                    metadata={
+                        "all_evidence": edge.evidence,
+                        "relationship_type": edge.relationship_type
+                    }
+                ))
+            
+            pdf_graph = GraphData(nodes=nodes, edges=edges, metadata={"source": doc.filename})
+            
+            pdf_graphs.append(PDFGraphExport(
+                document_id=doc.id,
+                filename=doc.filename,
+                uploaded_at=doc.uploaded_at.isoformat(),
+                graph=pdf_graph
+            ))
         
-        edges = []
-        for ge in project.graph_edges:
-            edges.append({
-                "source": ge.source_id,
-                "target": ge.target_id,
-                "value": ge.weight,
-                "title": ge.evidence[0] if ge.evidence else "",
-                "metadata": {
-                    "all_evidence": ge.evidence,
-                    "relationship_type": ge.relationship_type
-                }
-            })
-        
-        graph = GraphData(nodes=nodes, edges=edges, metadata={})
-        
+        from app.models.schemas import ProjectExport
         return ProjectExport(
             project_name=project.name,
+            project_id=project.id,
             created_at=project.created_at.isoformat(),
             updated_at=project.updated_at.isoformat(),
-            graph=graph,
-            sources=[{"type": "pdf", "filename": doc.filename} for doc in project.documents],
+            pdf_graphs=pdf_graphs,
             settings={}
         )
     except HTTPException:
@@ -562,34 +1001,76 @@ async def export_project(project_id: str, db: Session = Depends(get_db)):
 
 
 @app.post("/api/projects/import")
-async def import_project(req: dict):
-    """Import a project from JSON"""
+async def import_project(req: dict, db: Session = Depends(get_db)):
+    """Import a project from JSON with per-PDF graphs"""
+    from app.models.database import Project, Document, PDFGraphNode, PDFGraphEdge
+    
     try:
         print(f"DEBUG Import: Received keys: {req.keys()}")
         
-        # Accept flexible JSON structure
         project_data = req.get("project_data", req)
         
-        # Extract graph data
-        if isinstance(project_data, dict) and "graph" in project_data:
-            graph_data = project_data["graph"]
-            print(f"DEBUG Import: Found graph with {len(graph_data.get('nodes', []))} nodes")
-        else:
-            # Assume the payload itself is the graph
-            graph_data = project_data
-            print(f"DEBUG Import: Using raw data as graph")
+        # Create new project
+        project_id = str(uuid.uuid4())
+        project = Project(
+            id=project_id,
+            name=project_data.get("project_name", f"Imported Project {project_id[:8]}"),
+            description="Imported project"
+        )
+        db.add(project)
+        db.commit()
         
-        # Ensure graph has required structure
-        if not isinstance(graph_data, dict):
-            raise ValueError("Graph data must be a dictionary")
+        # Import each PDF graph
+        pdf_graphs = project_data.get("pdf_graphs", [])
+        for pdf_graph_data in pdf_graphs:
+            doc_id = str(uuid.uuid4())
+            document = Document(
+                id=doc_id,
+                project_id=project.id,
+                filename=pdf_graph_data.get("filename", "unknown.pdf"),
+                file_path="",  # No actual file for imported projects
+                processed=1,
+                selected=1
+            )
+            db.add(document)
+            db.commit()
+            
+            # Import nodes
+            graph = pdf_graph_data.get("graph", {})
+            for node in graph.get("nodes", []):
+                pdf_node = PDFGraphNode(
+                    document_id=doc_id,
+                    entity_id=node["id"],
+                    entity_type=node["group"],
+                    count=node.get("metadata", {}).get("count", 1),
+                    degree=node.get("value", 1)
+                )
+                db.add(pdf_node)
+            
+            # Import edges
+            for edge in graph.get("edges", []):
+                pdf_edge = PDFGraphEdge(
+                    document_id=doc_id,
+                    source_id=edge["source"],
+                    target_id=edge["target"],
+                    weight=edge.get("value", 1.0),
+                    evidence=edge.get("metadata", {}).get("all_evidence", []),
+                    relationship_type=edge.get("metadata", {}).get("relationship_type", "CO_OCCURRENCE")
+                )
+                db.add(pdf_edge)
+            
+            db.commit()
         
-        if "nodes" not in graph_data or "edges" not in graph_data:
-            raise ValueError("Graph must have 'nodes' and 'edges' arrays")
-        
-        print(f"DEBUG Import: Returning {len(graph_data['nodes'])} nodes, {len(graph_data['edges'])} edges")
-        return {"status": "success", "graph": graph_data}
+        return {
+            "status": "success",
+            "project_id": project.id,
+            "project_name": project.name,
+            "pdf_count": len(pdf_graphs)
+        }
     except Exception as e:
         print(f"ERROR Import: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 

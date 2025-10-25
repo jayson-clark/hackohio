@@ -60,6 +60,18 @@ class ProcessingStatus(BaseModel):
     result: Optional[GraphData] = None
 
 
+class PDFMetadata(BaseModel):
+    """Metadata for an individual PDF and its graph"""
+    document_id: str
+    filename: str
+    uploaded_at: str
+    processed: bool
+    selected: bool
+    node_count: int
+    edge_count: int
+    entity_counts: Dict[str, int] = {}
+
+
 class ProjectMetadata(BaseModel):
     """Project information"""
     project_id: str
@@ -68,8 +80,7 @@ class ProjectMetadata(BaseModel):
     created_at: str
     updated_at: str
     pdf_count: int
-    node_count: int
-    edge_count: int
+    pdfs: List[PDFMetadata] = []
 
 
 # ==== Conversational Agent Schemas ====
@@ -137,18 +148,33 @@ class NerPreviewResponse(BaseModel):
 
 # ==== Project Export/Import Schemas ====
 
+class PDFGraphExport(BaseModel):
+    """Export format for a single PDF's graph"""
+    document_id: str
+    filename: str
+    uploaded_at: str
+    graph: GraphData
+
+
 class ProjectExport(BaseModel):
+    """Export format for entire project with all PDF graphs"""
     project_name: str
+    project_id: str
     created_at: str
     updated_at: str
-    graph: GraphData
-    sources: List[Dict[str, Any]] = []
+    pdf_graphs: List[PDFGraphExport]
     settings: Dict[str, Any] = {}
 
 
 class ProjectImportRequest(BaseModel):
     project_data: ProjectExport
     merge_with_existing: bool = False
+
+
+class PDFSelectionRequest(BaseModel):
+    """Request to update which PDFs are selected for graph visualization"""
+    project_id: str
+    selected_document_ids: List[str]
 
 
 # ==== Paper Discovery Schemas ====

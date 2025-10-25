@@ -54,6 +54,27 @@ export interface GraphAnalytics {
   entity_counts: Record<string, number>;
 }
 
+export interface PDFMetadata {
+  document_id: string;
+  filename: string;
+  uploaded_at: string;
+  processed: boolean;
+  selected: boolean;
+  node_count: number;
+  edge_count: number;
+  entity_counts: Record<string, number>;
+}
+
+export interface ProjectInfo {
+  project_id: string;
+  name: string;
+  description: string;
+  created_at: string;
+  updated_at: string;
+  pdf_count: number;
+  pdfs: PDFMetadata[];
+}
+
 export interface ProcessingStatus {
   job_id: string;
   status: 'pending' | 'processing' | 'completed' | 'failed';

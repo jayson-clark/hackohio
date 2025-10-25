@@ -9,7 +9,7 @@ export function UploadPanel() {
   const [files, setFiles] = useState<File[]>([]);
   const [projectName, setProjectName] = useState('');
   
-  const { setProcessingStatus, setIsProcessing, setGraphData } = useStore();
+  const { setProcessingStatus, setIsProcessing, setGraphData, setCurrentProject, setPdfs } = useStore();
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     setFiles((prev) => [...prev, ...acceptedFiles]);
@@ -53,12 +53,31 @@ export function UploadPanel() {
             
             if (updatedStatus.result) {
               console.log('Graph data received:', updatedStatus.result);
-              console.log('Nodes:', updatedStatus.result.nodes?.length);
-              console.log('Edges:', updatedStatus.result.edges?.length);
               setGraphData(updatedStatus.result);
+              
+              // Extract project ID from metadata and load project info
+              const projectId = updatedStatus.result.metadata?.project_id;
+              if (projectId) {
+                try {
+                  // Load project info
+                  const projects = await apiService.listProjects();
+                  const project = projects.find(p => p.project_id === projectId);
+                  if (project) {
+                    setCurrentProject(project);
+                    setPdfs(project.pdfs);
+                  }
+                } catch (error) {
+                  console.error('Failed to load project info:', error);
+                }
+              }
+              
               toast.success('Knowledge graph generated successfully!', {
                 id: loadingToast,
               });
+              
+              // Clear files after successful upload
+              setFiles([]);
+              setProjectName('');
             } else {
               console.error('No result in completed status:', updatedStatus);
               toast.error('No graph data received');
@@ -219,28 +238,26 @@ export function UploadPanel() {
                   const res = await apiService.importProject(data);
                   console.log('UploadPanel import - API response:', res);
                   
-                  if (res.graph) {
-                    // Normalize graph data to ensure edges have string IDs
-                    const normalizedGraph = {
-                      ...res.graph,
-                      edges: res.graph.edges.map((edge: any) => ({
-                        ...edge,
-                        source: typeof edge.source === 'string' ? edge.source : edge.source?.id || edge.source,
-                        target: typeof edge.target === 'string' ? edge.target : edge.target?.id || edge.target,
-                      }))
-                    };
+                  if (res.project_id) {
+                    // Load the newly imported project
+                    const projects = await apiService.listProjects();
+                    const importedProject = projects.find(p => p.project_id === res.project_id);
                     
-                    console.log('UploadPanel import - normalized:', {
-                      nodes: normalizedGraph.nodes.length,
-                      edges: normalizedGraph.edges.length,
-                      sampleEdge: normalizedGraph.edges[0]
-                    });
-                    
-                    setGraphData(normalizedGraph);
-                    toast.success(`Project imported! ${normalizedGraph.nodes?.length || 0} nodes, ${normalizedGraph.edges?.length || 0} edges`);
+                    if (importedProject) {
+                      setCurrentProject(importedProject);
+                      setPdfs(importedProject.pdfs);
+                      
+                      // Load the graph from selected PDFs
+                      const graph = await apiService.getProjectGraph(res.project_id, true);
+                      setGraphData(graph);
+                      
+                      toast.success(`Imported project "${res.project_name}" with ${res.pdf_count} PDFs!`);
+                    } else {
+                      toast.error('Failed to load imported project');
+                    }
                   } else {
-                    toast.error('No graph data in response');
-                    console.error('Import response missing graph:', res);
+                    toast.error('Import failed: No project created');
+                    console.error('Import response:', res);
                   }
                 } catch (error: any) {
                   console.error('Import error:', error);

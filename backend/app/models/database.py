@@ -18,10 +18,8 @@ class Project(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
-    # Relationships
+    # Relationships - only documents now, graphs are per-PDF
     documents = relationship("Document", back_populates="project", cascade="all, delete-orphan")
-    graph_nodes = relationship("GraphNode", back_populates="project", cascade="all, delete-orphan")
-    graph_edges = relationship("GraphEdge", back_populates="project", cascade="all, delete-orphan")
 
 
 class Document(Base):
@@ -33,35 +31,40 @@ class Document(Base):
     file_path = Column(String, nullable=False)
     uploaded_at = Column(DateTime, default=datetime.utcnow)
     processed = Column(Integer, default=0)  # 0=pending, 1=completed, -1=failed
+    selected = Column(Integer, default=1)  # 0=unselected, 1=selected for graph
     
     project = relationship("Project", back_populates="documents")
+    pdf_nodes = relationship("PDFGraphNode", back_populates="document", cascade="all, delete-orphan")
+    pdf_edges = relationship("PDFGraphEdge", back_populates="document", cascade="all, delete-orphan")
 
 
-class GraphNode(Base):
-    __tablename__ = "graph_nodes"
+class PDFGraphNode(Base):
+    """Individual graph nodes for each PDF document"""
+    __tablename__ = "pdf_graph_nodes"
     
     id = Column(Integer, primary_key=True, autoincrement=True)
-    project_id = Column(String, ForeignKey("projects.id"))
-    node_id = Column(String, nullable=False)  # Entity name
+    document_id = Column(String, ForeignKey("documents.id"))
+    entity_id = Column(String, nullable=False)  # Entity name
     entity_type = Column(String, nullable=False)
+    count = Column(Integer, default=1)  # Occurrences in this PDF
     degree = Column(Integer, default=0)
-    node_metadata = Column(JSON, default={})
     
-    project = relationship("Project", back_populates="graph_nodes")
+    document = relationship("Document", back_populates="pdf_nodes")
 
 
-class GraphEdge(Base):
-    __tablename__ = "graph_edges"
+class PDFGraphEdge(Base):
+    """Individual graph edges for each PDF document"""
+    __tablename__ = "pdf_graph_edges"
     
     id = Column(Integer, primary_key=True, autoincrement=True)
-    project_id = Column(String, ForeignKey("projects.id"))
-    source = Column(String, nullable=False)
-    target = Column(String, nullable=False)
+    document_id = Column(String, ForeignKey("documents.id"))
+    source_id = Column(String, nullable=False)
+    target_id = Column(String, nullable=False)
     weight = Column(Float, default=1.0)
-    evidence = Column(Text, default="")
-    edge_metadata = Column(JSON, default={})
+    evidence = Column(JSON, default=list)  # List of evidence sentences
+    relationship_type = Column(String, default="CO_OCCURRENCE")
     
-    project = relationship("Project", back_populates="graph_edges")
+    document = relationship("Document", back_populates="pdf_edges")
 
 
 def init_db():
