@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     max_upload_size_mb: int = 100
     max_concurrent_processing: int = 4
     enable_llm_extraction: bool = False
+    # Use a fine-grained biomedical NER by default
+    scispacy_model: str = "en_ner_bionlp13cg_md"
     
     # CORS
     cors_origins: List[str] = ["http://localhost:5173", "http://localhost:3000"]

@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { useStore } from '@/store/useStore';
 import { ENTITY_COLORS, ENTITY_LABELS, EntityType } from '@/types';
+import { apiService } from '@/services/api';
 
 export function Sidebar() {
   const {
@@ -26,6 +27,23 @@ export function Sidebar() {
   } = useStore();
 
   const [searchQuery, setSearchQuery] = useState('');
+  const [hypotheses, setHypotheses] = useState<
+    Array<{ title: string; explanation: string; entities: string[]; confidence: number }>
+  >([]);
+  const [loadingHyp, setLoadingHyp] = useState(false);
+
+  const fetchHypotheses = async () => {
+    if (!filteredGraphData) return;
+    setLoadingHyp(true);
+    try {
+      const res = await apiService.generateHypotheses(filteredGraphData, undefined, 10);
+      setHypotheses(res.hypotheses || []);
+    } catch (e) {
+      setHypotheses([]);
+    } finally {
+      setLoadingHyp(false);
+    }
+  };
 
   const entityTypes = Object.keys(ENTITY_COLORS) as EntityType[];
 
@@ -196,6 +214,52 @@ export function Sidebar() {
             <BarChart3 className="w-5 h-5" />
             <span>View Analytics</span>
           </button>
+
+          {/* Hypotheses */}
+          <div className="mt-6">
+            <div className="flex items-center justify-between mb-2">
+              <label className="block text-sm font-medium text-gray-300">Hypotheses</label>
+              <button
+                onClick={fetchHypotheses}
+                className="text-xs px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded border border-gray-700 text-gray-200"
+              >
+                {loadingHyp ? '...' : 'Generate'}
+              </button>
+            </div>
+            <div className="space-y-2 max-h-64 overflow-auto pr-1">
+              {hypotheses.length === 0 && (
+                <div className="text-xs text-gray-500">No hypotheses yet. Click Generate.</div>
+              )}
+              {hypotheses.map((h, idx) => (
+                <div
+                  key={idx}
+                  className="p-2 bg-gray-800 rounded border border-gray-700 cursor-pointer hover:bg-gray-750"
+                  onClick={() => {
+                    // Attempt to highlight hypothesis entities in the graph
+                    const nodes = new Set<string>(h.entities || []);
+                    const links = new Set<string>();
+                    // Edge pairs may be present for indirect hypotheses
+                    // @ts-ignore
+                    (h.edge_pairs || []).forEach(([a, b]) => links.add(`${a}-${b}`));
+                    // Fallback: connect all entities pairwise
+                    const es = h.entities || [];
+                    for (let i = 0; i < es.length; i++) {
+                      for (let j = i + 1; j < es.length; j++) {
+                        links.add(`${es[i]}-${es[j]}`);
+                      }
+                    }
+                    useStore.getState().setHighlightedNodes(nodes);
+                    useStore.getState().setHighlightedLinks(links);
+                  }}
+                >
+                  <div className="text-sm text-gray-100 font-semibold">{h.title}</div>
+                  <div className="text-xs text-gray-400 mt-1">{h.explanation}</div>
+                  <div className="text-xs text-gray-500 mt-1">Entities: {h.entities.join(', ')}</div>
+                  <div className="text-xs text-gray-500">Confidence: {(h.confidence * 100).toFixed(0)}%</div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
     </>

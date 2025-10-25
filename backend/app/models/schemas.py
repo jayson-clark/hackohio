@@ -71,3 +71,66 @@ class ProjectMetadata(BaseModel):
     node_count: int
     edge_count: int
 
+
+# ==== Conversational Agent Schemas ====
+
+class ChatMessage(BaseModel):
+    role: str  # "user" | "assistant" | "system"
+    content: str
+
+
+class ChatRequest(BaseModel):
+    message: str
+    graph: GraphData
+    conversation_history: List[ChatMessage] = []
+
+
+class ChatResponse(BaseModel):
+    answer: str
+    citations: List[str] = []
+    relevant_nodes: List[str] = []
+    relevant_edges: List[List[str]] = []  # [[source, target], ...]
+    tool_calls: List[str] = []
+
+
+# ==== Hypothesis Generation Schemas ====
+
+class Hypothesis(BaseModel):
+    title: str
+    explanation: str
+    entities: List[str]
+    evidence_sentences: List[str] = []
+    edge_pairs: List[List[str]] = []  # supporting edges [[a,b], [b,c]]
+    confidence: float = 0.5
+
+
+class HypothesesRequest(BaseModel):
+    graph: GraphData
+    focus_entity: Optional[str] = None
+    max_results: int = 10
+
+
+class HypothesesResponse(BaseModel):
+    hypotheses: List[Hypothesis]
+
+
+# ==== NER Preview Schemas ====
+
+class NerPreviewRequest(BaseModel):
+    text: str
+    min_occurrences: int = 2
+    return_raw: bool = False
+
+
+class NerSentenceEntities(BaseModel):
+    sentence_id: int
+    sentence: str
+    entities: List[Dict[str, Any]]
+
+
+class NerPreviewResponse(BaseModel):
+    sentences: List[NerSentenceEntities]
+    unique_entities: Dict[str, Dict[str, Any]]
+    raw_sentences: Optional[List[NerSentenceEntities]] = None
+    debug: Optional[Dict[str, Any]] = None
+

@@ -6,6 +6,7 @@ import { ForceGraph3DView } from './components/ForceGraph3DView';
 import { UploadPanel } from './components/UploadPanel';
 import { ProcessingOverlay } from './components/ProcessingOverlay';
 import { Sidebar } from './components/Sidebar';
+import { ChatPanel } from './components/ChatPanel';
 import { NodeDetails } from './components/NodeDetails';
 import { Analytics } from './components/Analytics';
 import { ExportMenu } from './components/ExportMenu';
@@ -127,6 +128,7 @@ function App() {
               <ForceGraph3DView />
             )}
           </div>
+          <ChatPanel />
         </>
       )}
 

@@ -24,8 +24,18 @@ from app.services import (
     RelationshipExtractor,
     GraphBuilder,
     LLMService,
+    GraphConversationalAgent,
+    HypothesisAgent,
 )
 from sqlalchemy.orm import Session
+from app.models import (
+    ChatRequest,
+    ChatResponse,
+    HypothesesRequest,
+    HypothesesResponse,
+    NerPreviewRequest,
+    NerPreviewResponse,
+)
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -45,7 +55,8 @@ app.add_middleware(
 
 # Initialize services
 pdf_processor = PDFProcessor()
-ner_service = NERService()
+from app.config import settings as _settings
+ner_service = NERService(model_name=_settings.scispacy_model)
 relationship_extractor = RelationshipExtractor()
 graph_builder = GraphBuilder()
 llm_service = LLMService()
@@ -315,6 +326,247 @@ async def list_projects(db: Session = Depends(get_db)):
         )
         for p in projects
     ]
+
+
+# ==== Conversational Agent Endpoints ====
+
+@app.post("/api/chat", response_model=ChatResponse)
+async def chat_with_graph(payload: dict):
+    try:
+        # Accept flexible JSON payload to avoid validation errors from clients
+        message = (payload or {}).get("message", "")
+        graph = (payload or {}).get("graph", {})
+        nodes = graph.get("nodes", [])
+        edges = graph.get("edges", [])
+
+        # Rebuild graph
+        entities = {
+            n.get("id"): {
+                "original_name": n.get("id"),
+                "type": (n.get("group") or "UNKNOWN"),
+                "count": (n.get("metadata") or {}).get("count", 1),
+            }
+            for n in nodes
+            if n.get("id")
+        }
+        relationships = []
+        for e in edges:
+            relationships.append({
+                "source": e.get("source"),
+                "target": e.get("target"),
+                "weight": e.get("value", 1.0),
+                "evidence": (e.get("metadata") or {}).get("all_evidence", [e.get("title", "")]),
+                "relationship_type": (e.get("metadata") or {}).get("relationship_type", "CO_OCCURRENCE"),
+            })
+        graph_builder.build_graph(entities, relationships)
+
+        agent = GraphConversationalAgent(graph_builder.graph)
+        text = str(message).strip()
+        answer = ""
+        citations: List[str] = []
+        relevant_nodes: List[str] = []
+        relevant_edges: List[List[str]] = []
+        tool_calls: List[str] = []
+
+        if "shortest path" in text.lower() and " between " in text.lower():
+            try:
+                lower = text.lower()
+                seg = lower.split(" between ", 1)[1]
+                parts = seg.split(" and ")
+                a = parts[0].strip()
+                b = parts[1].strip()
+                def best_match(name: str) -> str:
+                    names = [n for n in graph_builder.graph.nodes()]
+                    for n in names:
+                        if n.lower() == name:
+                            return n
+                    for n in names:
+                        if name in n.lower():
+                            return n
+                    return name
+                a_real = best_match(a)
+                b_real = best_match(b)
+                res = agent.shortest_path(a_real, b_real)
+                tool_calls.append("shortest_path")
+                if res["paths"]:
+                    path = res["paths"][0]
+                    nodes = path["nodes"]
+                    edges = path["edges"]
+                    answer = f"Shortest path: {' → '.join(nodes)}"
+                    relevant_nodes = nodes
+                    relevant_edges = [[e["source"], e["target"]] for e in edges]
+                    citations = [evi for e in edges for evi in e.get("evidence", [])][:3]
+                else:
+                    answer = "No path found between the specified entities."
+            except Exception:
+                answer = "Could not parse entities for shortest path. Use 'shortest path between A and B'."
+        elif text.lower().startswith("neighbors of "):
+            name = text[len("neighbors of "):].strip()
+            target = None
+            for n in graph_builder.graph.nodes():
+                if n.lower() == name.lower():
+                    target = n
+                    break
+            res = agent.get_neighbors(target or name, depth=1)
+            tool_calls.append("get_neighbors")
+            layers = res.get("layers", [])
+            if layers:
+                neighbors = list({item["target"] for item in layers[0]})
+                answer = f"Neighbors of {res['entity']}: {', '.join(neighbors[:20])}"
+                relevant_nodes = [res["entity"], *neighbors]
+                relevant_edges = [[res["entity"], t] for t in neighbors]
+                citations = [e for item in layers[0] for e in item.get("evidence", [])][:3]
+            else:
+                answer = f"No neighbors found for {res['entity']}."
+        elif text.lower().startswith("common connections "):
+            try:
+                names = [s.strip() for s in text.split(" ", 2)[2].split(",")]
+                real = []
+                node_names = [n for n in graph_builder.graph.nodes()]
+                for q in names:
+                    m = None
+                    for n in node_names:
+                        if n.lower() == q.lower():
+                            m = n
+                            break
+                    real.append(m or q)
+                res = agent.common_connections(real)
+                tool_calls.append("common_connections")
+                commons = res.get("common", [])
+                if commons:
+                    answer = "Common connections: " + ", ".join([c["entity"] for c in commons[:20]])
+                    relevant_nodes = real + [c["entity"] for c in commons]
+                else:
+                    answer = "No common connections found."
+            except Exception:
+                answer = "Use 'common connections A, B, C'"
+        else:
+            stats = payload.graph.metadata or {}
+            answer = (
+                f"Graph has {stats.get('total_nodes', len(payload.graph.nodes))} nodes and "
+                f"{stats.get('total_edges', len(payload.graph.edges))} edges. "
+                "Ask: 'shortest path between A and B', 'neighbors of X', or 'common connections A, B'."
+            )
+
+        return ChatResponse(
+            answer=answer,
+            citations=citations,
+            relevant_nodes=relevant_nodes,
+            relevant_edges=relevant_edges,
+            tool_calls=tool_calls,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/hypotheses", response_model=HypothesesResponse)
+async def generate_hypotheses(payload: dict):
+    try:
+        graph = (payload or {}).get("graph", {})
+        nodes = graph.get("nodes", [])
+        edges = graph.get("edges", [])
+        focus_entity = (payload or {}).get("focus_entity")
+        max_results = int((payload or {}).get("max_results", 10))
+
+        entities = {
+            n.get("id"): {
+                "original_name": n.get("id"),
+                "type": (n.get("group") or "UNKNOWN"),
+                "count": (n.get("metadata") or {}).get("count", 1),
+            }
+            for n in nodes
+            if n.get("id")
+        }
+        relationships = []
+        for e in edges:
+            relationships.append({
+                "source": e.get("source"),
+                "target": e.get("target"),
+                "weight": e.get("value", 1.0),
+                "evidence": (e.get("metadata") or {}).get("all_evidence", [e.get("title", "")]),
+                "relationship_type": (e.get("metadata") or {}).get("relationship_type", "CO_OCCURRENCE"),
+            })
+        graph_builder.build_graph(entities, relationships)
+
+        agent = HypothesisAgent(graph_builder.graph)
+        hyps = agent.generate(focus=focus_entity, max_results=max_results)
+        normalized = [
+            {
+                "title": h["title"],
+                "explanation": h["explanation"],
+                "entities": h.get("entities", []),
+                "evidence_sentences": h.get("evidence_sentences", []),
+                "edge_pairs": h.get("edge_pairs", []),
+                "confidence": float(h.get("confidence", 0.5)),
+            }
+            for h in hyps
+        ]
+
+        return HypothesesResponse(hypotheses=normalized)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ner/preview", response_model=NerPreviewResponse)
+async def ner_preview(req: NerPreviewRequest):
+    try:
+        doc = ner_service.nlp.make_doc(req.text)
+        if not ner_service.nlp.has_pipe("sentencizer"):
+            try:
+                ner_service.nlp.add_pipe("sentencizer")
+            except Exception:
+                pass
+        doc = ner_service.nlp(req.text)
+        sentences = [sent.text.strip() for sent in doc.sents if sent.text.strip()]
+        sent_ents = ner_service.extract_entities_from_sentences(sentences)
+
+        original = ner_service.min_entity_occurrences
+        ner_service.min_entity_occurrences = max(1, req.min_occurrences)
+        filtered = ner_service.filter_entities(sent_ents)
+        unique = ner_service.get_unique_entities(filtered)
+        ner_service.min_entity_occurrences = original
+
+        def to_schema(items: List[dict]) -> List[dict]:
+            return [
+                {
+                    "sentence_id": i["sentence_id"],
+                    "sentence": i["sentence"],
+                    "entities": i["entities"],
+                }
+                for i in items
+            ]
+
+        # Build debug info
+        from collections import Counter
+        label_counter = Counter()
+        for s in sentences[: min(50, len(sentences))]:
+            d = ner_service.nlp(s)
+            for ent in d.ents:
+                label_counter[ent.label_] += 1
+
+        sample_by_label = {}
+        for s in sentences[: min(50, len(sentences))]:
+            d = ner_service.nlp(s)
+            for ent in d.ents:
+                lbl = ent.label_
+                sample_by_label.setdefault(lbl, [])
+                if len(sample_by_label[lbl]) < 5:
+                    sample_by_label[lbl].append(ent.text)
+
+        return NerPreviewResponse(
+            sentences=to_schema(filtered),
+            unique_entities=unique,
+            raw_sentences=to_schema(sent_ents) if req.return_raw else None,
+            debug={
+                "label_counts": dict(label_counter),
+                "samples": sample_by_label,
+                "model": _settings.scispacy_model,
+                "min_entity_occurrences": original,
+                "used_min_occurrences": max(1, req.min_occurrences),
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

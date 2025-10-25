@@ -78,6 +78,61 @@ export const apiService = {
   },
 
   /**
+   * Chat with the graph
+   */
+  async chat(message: string, graph: GraphData, conversationHistory: Array<{ role: string; content: string }> = []) {
+    const response = await api.post('/api/chat', {
+      message,
+      graph,
+      conversation_history: conversationHistory,
+    });
+    return response.data as {
+      answer: string;
+      citations: string[];
+      relevant_nodes: string[];
+      relevant_edges: [string, string][];
+      tool_calls: string[];
+    };
+  },
+
+  /**
+   * Generate hypotheses
+   */
+  async generateHypotheses(graph: GraphData, focusEntity?: string, maxResults = 10) {
+    const response = await api.post('/api/hypotheses', {
+      graph,
+      focus_entity: focusEntity,
+      max_results: maxResults,
+    });
+    return response.data as {
+      hypotheses: Array<{
+        title: string;
+        explanation: string;
+        entities: string[];
+        evidence_sentences: string[];
+        edge_pairs: [string, string][];
+        confidence: number;
+      }>;
+    };
+  },
+
+  /**
+   * NER preview for raw text
+   */
+  async nerPreview(text: string, minOccurrences = 2, returnRaw = false) {
+    const response = await api.post('/api/ner/preview', {
+      text,
+      min_occurrences: minOccurrences,
+      return_raw: returnRaw,
+    });
+    return response.data as {
+      sentences: Array<{ sentence_id: number; sentence: string; entities: any[] }>;
+      unique_entities: Record<string, { original_name: string; type: string; count: number }>;
+      raw_sentences?: Array<{ sentence_id: number; sentence: string; entities: any[] }>;
+    };
+  },
+
+  /**
    * Health check
    */
   async healthCheck(): Promise<{ status: string; version: string }> {

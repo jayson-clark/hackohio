@@ -18,21 +18,39 @@ class NERService:
             )
         
         # Entity type mappings
-        # Note: en_core_sci_lg labels everything as "ENTITY", so we accept it
+        # Expand mapping to cover BioNLP/BCRAFT fine-grained labels
         self.entity_type_map = {
-            "ENTITY": "ENTITY",  # Generic biomedical entity from en_core_sci_lg
+            # Generic
+            "ENTITY": "ENTITY",
+            # Genes/Proteins
             "GENE": "GENE_OR_GENE_PRODUCT",
             "GENE_OR_GENE_PRODUCT": "GENE_OR_GENE_PRODUCT",
+            "GENE_OR_GENE": "GENE_OR_GENE_PRODUCT",
+            "PROTEIN": "GENE_OR_GENE_PRODUCT",
+            "GENE_OR_GENE_PRODUCT_BIO": "GENE_OR_GENE_PRODUCT",
+            # Chemicals
             "CHEMICAL": "CHEMICAL",
+            "SIMPLE_CHEMICAL": "CHEMICAL",
+            "AMINO_ACID": "CHEMICAL",
+            "ION": "CHEMICAL",
+            # Diseases/Phenomena
             "DISEASE": "DISEASE",
+            "CANCER": "DISEASE",
+            "PATHOLOGICAL_FORMATION": "DISEASE",
+            # Organism/Anatomy
             "ORGANISM": "ORGANISM",
-            "CELL_TYPE": "CELL_TYPE",
             "TISSUE": "TISSUE",
+            "CELL": "CELL_TYPE",
+            "CELL_TYPE": "CELL_TYPE",
+            "CELL_LINE": "CELL_TYPE",
             "ORGAN": "ORGAN",
+            # Processes/Regulation
+            "BIOLOGICAL_PROCESS": "ENTITY",
+            "REGULATOR": "ENTITY",
         }
         
         # Minimum entity occurrence threshold - require entities to appear multiple times
-        self.min_entity_occurrences = 3
+        self.min_entity_occurrences = 4
         
         # Junk patterns to exclude (case-insensitive)
         self.exclude_patterns = [
@@ -67,13 +85,16 @@ class NERService:
             'author', 'authors', 'correspondence', 'affiliation', 'affiliations',
             'international journal', 'and', 'or', 'the', 'of', 'in', 'on', 'at',
         }
+        # Additional skip patterns: initials, lone letters/short tokens
+        self.initials_regex = re.compile(r"^(?:[A-Z]\.?){1,3}$")  # e.g., R., A., R.P.
+        self.short_token_regex = re.compile(r"^[A-Za-z]{1,2}$")
     
     def _is_valid_biomedical_entity(self, text: str, label: str) -> bool:
         """Determine if an entity is a valid biomedical entity"""
         text_lower = text.lower().strip()
         
         # Length checks
-        if len(text) < 2 or len(text) > 80:
+        if len(text) < 3 or len(text) > 80:
             return False
         
         # Check skip words
@@ -94,6 +115,10 @@ class NERService:
         if alpha_ratio < 0.4:
             return False
         
+        # Skip initials and very short tokens
+        if self.initials_regex.match(text.strip()) or self.short_token_regex.match(text.strip()):
+            return False
+
         # ONLY accept mapped biomedical entity types
         if label not in self.entity_type_map:
             return False

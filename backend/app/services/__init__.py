@@ -3,6 +3,8 @@ from .ner_service import NERService
 from .relationship_extractor import RelationshipExtractor
 from .graph_builder import GraphBuilder
 from .llm_service import LLMService
+from .graph_agent import GraphConversationalAgent
+from .hypothesis_agent import HypothesisAgent
 
 __all__ = [
     "PDFProcessor",
@@ -10,5 +12,7 @@ __all__ = [
     "RelationshipExtractor",
     "GraphBuilder",
     "LLMService",
+    "GraphConversationalAgent",
+    "HypothesisAgent",
 ]
 
