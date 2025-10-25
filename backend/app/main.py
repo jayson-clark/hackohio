@@ -350,7 +350,7 @@ async def chat_with_graph(payload: dict):
         conversation_history = (payload or {}).get("conversation_history", [])
         nodes = graph.get("nodes", [])
         edges = graph.get("edges", [])
-
+        
         # Rebuild graph
         entities = {
             n.get("id"): {
@@ -361,15 +361,27 @@ async def chat_with_graph(payload: dict):
             for n in nodes
             if n.get("id")
         }
+        
         relationships = []
         for e in edges:
+            # Handle both string IDs and object references
+            source_id = e.get("source")
+            target_id = e.get("target")
+            
+            # If source/target are objects, extract the 'id' field
+            if isinstance(source_id, dict):
+                source_id = source_id.get("id")
+            if isinstance(target_id, dict):
+                target_id = target_id.get("id")
+            
             relationships.append({
-                "source": e.get("source"),
-                "target": e.get("target"),
+                "source": source_id,
+                "target": target_id,
                 "weight": e.get("value", 1.0),
                 "evidence": (e.get("metadata") or {}).get("all_evidence", [e.get("title", "")]),
                 "relationship_type": (e.get("metadata") or {}).get("relationship_type", "CO_OCCURRENCE"),
             })
+        
         graph_builder.build_graph(entities, relationships)
 
         # Create agent with LLM service for intelligent chat
@@ -769,7 +781,15 @@ async def get_lava_usage():
         usage = await lava_service.get_usage_stats()
         return {"enabled": True, **usage}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        print(f"Lava usage error: {e}")
+        print(traceback.format_exc())
+        # Return graceful fallback
+        return {
+            "enabled": True,
+            "error": str(e),
+            "message": "Usage endpoint unavailable. Use /api/lava/requests to see activity."
+        }
 
 
 @app.get("/api/lava/requests")

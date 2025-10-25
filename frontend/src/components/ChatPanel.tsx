@@ -13,9 +13,16 @@ export const ChatPanel = () => {
 
   const send = async () => {
     if (!filteredGraphData || !input.trim()) return;
+    
+    // Clear highlights from previous query
+    setHighlightedNodes(new Set());
+    setHighlightedLinks(new Set());
+    
     const nextHistory = [...messages, { role: 'user', content: input }];
     setMessages(nextHistory);
     setLoading(true);
+    setInput(''); // Clear input immediately
+    
     try {
       const res = await apiService.chat(input, filteredGraphData, nextHistory);
       setMessages([...nextHistory, { role: 'assistant', content: res.answer }]);
@@ -29,7 +36,6 @@ export const ChatPanel = () => {
       setMessages([...nextHistory, { role: 'assistant', content: 'Error answering. Check backend.' }]);
     } finally {
       setLoading(false);
-      setInput('');
     }
   };
 
@@ -47,7 +53,21 @@ export const ChatPanel = () => {
         <div className="fixed right-0 top-0 h-full w-[360px] bg-gray-900/90 border-l border-gray-800 backdrop-blur-md z-20 flex flex-col">
       <div className="p-3 border-b border-gray-800 text-gray-200 font-semibold flex items-center justify-between">
         <span>Graph Chat</span>
-        <button onClick={() => setOpen(false)} className="text-xs px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded border border-gray-700 text-gray-300">Minimize</button>
+        <div className="flex gap-2">
+          {messages.length > 0 && (
+            <button 
+              onClick={() => {
+                setMessages([]);
+                setHighlightedNodes(new Set());
+                setHighlightedLinks(new Set());
+              }} 
+              className="text-xs px-2 py-1 bg-red-600 hover:bg-red-500 rounded text-white"
+            >
+              Clear
+            </button>
+          )}
+          <button onClick={() => setOpen(false)} className="text-xs px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded border border-gray-700 text-gray-300">Minimize</button>
+        </div>
       </div>
       <div className="flex-1 overflow-auto p-3 space-y-3">
         {messages.map((m, i) => (

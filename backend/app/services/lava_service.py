@@ -126,24 +126,44 @@ class LavaService:
             response.raise_for_status()
             return response.json()
     
-    async def get_usage_stats(self) -> Dict[str, Any]:
+    async def get_usage_stats(self, start_date: Optional[str] = None, end_date: Optional[str] = None) -> Dict[str, Any]:
         """
         Get usage statistics from Lava
+        Note: The /usage endpoint may require specific date parameters or may not be available
         """
         if not self.enabled:
             raise ValueError("Lava service is not enabled")
             
         headers = {
-            "Authorization": f"Bearer {self.secret_key}"
+            "Authorization": f"Bearer {self.secret_key}",
+            "Content-Type": "application/json"
         }
         
+        params = {}
+        if start_date:
+            params["start_date"] = start_date
+        if end_date:
+            params["end_date"] = end_date
+        
         async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self.BASE_URL}/usage",
-                headers=headers
-            )
-            response.raise_for_status()
-            return response.json()
+            try:
+                response = await client.get(
+                    f"{self.BASE_URL}/usage",
+                    headers=headers,
+                    params=params
+                )
+                response.raise_for_status()
+                return response.json()
+            except httpx.HTTPStatusError as e:
+                # If usage endpoint doesn't work, try listing recent requests instead
+                if e.response.status_code == 400:
+                    # Fallback to requests list for usage info
+                    requests_response = await self.list_requests(limit=100)
+                    return {
+                        "note": "Usage endpoint not available, showing recent requests",
+                        "requests": requests_response
+                    }
+                raise
     
     async def list_requests(
         self,

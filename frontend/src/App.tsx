@@ -8,11 +8,9 @@ import { ProcessingOverlay } from './components/ProcessingOverlay';
 import { Sidebar } from './components/Sidebar';
 import { ChatPanel } from './components/ChatPanel';
 import { NodeDetails } from './components/NodeDetails';
-import { Analytics } from './components/Analytics';
-import { ExportMenu } from './components/ExportMenu';
 
 function App() {
-  const { graphData, filteredGraphData, viewMode, filterOptions, setFilteredGraphData } = useStore();
+  const { graphData, viewMode, filterOptions, setFilteredGraphData } = useStore();
 
   // Apply filters when filter options or graph data change
   useEffect(() => {
@@ -117,18 +115,8 @@ function App() {
         </div>
       ) : (
         <>
-          {/* Debug info */}
-          <div className="fixed top-4 right-4 bg-black/80 text-white p-4 rounded-lg text-xs z-50">
-            <div>Nodes: {graphData?.nodes?.length || 0}</div>
-            <div>Edges: {graphData?.edges?.length || 0}</div>
-            <div>Filtered Nodes: {filteredGraphData?.nodes?.length || 0}</div>
-            <div>Filtered Edges: {filteredGraphData?.edges?.length || 0}</div>
-          </div>
-          
           <Sidebar />
           <NodeDetails />
-          <Analytics />
-          <ExportMenu />
           
           <div className="w-full h-full">
             {viewMode.dimension === '2d' ? (

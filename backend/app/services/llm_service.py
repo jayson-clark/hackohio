@@ -25,13 +25,17 @@ class LLMService:
     """
     
     def __init__(self):
-        self.enabled = settings.enable_llm_extraction
-        self.openai_client = None
-        self.anthropic_client = None
         self.lava_service = LavaService()
         self.use_lava = self.lava_service.enabled
         
-        if self.enabled:
+        # Enable LLM if either Lava is enabled OR direct API keys are provided
+        self.enabled = settings.enable_llm_extraction or self.use_lava
+        
+        self.openai_client = None
+        self.anthropic_client = None
+        
+        if self.enabled and not self.use_lava:
+            # Only initialize direct clients if NOT using Lava
             if OPENAI_AVAILABLE and settings.openai_api_key:
                 self.openai_client = openai.OpenAI(api_key=settings.openai_api_key)
             elif ANTHROPIC_AVAILABLE and settings.anthropic_api_key:
@@ -46,13 +50,19 @@ class LLMService:
         Use LLM to extract relationships from a sentence
         Returns relationships with semantic labels
         """
-        if not self.enabled or not (self.openai_client or self.anthropic_client):
+        if not self.enabled:
+            return []
+        
+        if not self.use_lava and not (self.openai_client or self.anthropic_client):
             return []
         
         prompt = self._build_extraction_prompt(sentence, entities)
         
         try:
-            if self.openai_client:
+            # Prefer Lava if enabled, otherwise use direct clients
+            if self.use_lava:
+                return await self._extract_with_openai(prompt)
+            elif self.openai_client:
                 return await self._extract_with_openai(prompt)
             elif self.anthropic_client:
                 return await self._extract_with_anthropic(prompt)
@@ -173,7 +183,10 @@ If no clear relationships exist, return an empty array.
         Classify a relationship between two entities
         Returns semantic relationship type
         """
-        if not self.enabled or not (self.openai_client or self.anthropic_client):
+        if not self.enabled:
+            return None
+        
+        if not self.use_lava and not (self.openai_client or self.anthropic_client):
             return None
         
         prompt = f"""Classify the relationship between these two biomedical entities based on the evidence.
@@ -199,53 +212,39 @@ Return only the relationship type, nothing else.
         try:
             messages = [{"role": "user", "content": prompt}]
             
-            if self.openai_client:
-                if self.use_lava:
-                    # Route through Lava
-                    response_data = await self.lava_service.forward_openai_request(
-                        messages=messages,
-                        model="gpt-3.5-turbo",
-                        temperature=0.1,
-                        max_tokens=20,
-                        metadata={
-                            "service": "synapse_mapper",
-                            "task": "relationship_classification"
-                        }
-                    )
-                    return response_data['data']['choices'][0]['message']['content'].strip()
-                else:
-                    # Direct OpenAI call
-                    response = await asyncio.to_thread(
-                        self.openai_client.chat.completions.create,
-                        model="gpt-3.5-turbo",
-                        messages=messages,
-                        temperature=0.1,
-                        max_tokens=20
-                    )
-                    return response.choices[0].message.content.strip()
+            # Prefer Lava, then fall back to direct clients
+            if self.use_lava:
+                # Route through Lava (defaults to OpenAI)
+                response_data = await self.lava_service.forward_openai_request(
+                    messages=messages,
+                    model="gpt-3.5-turbo",
+                    temperature=0.1,
+                    max_tokens=20,
+                    metadata={
+                        "service": "synapse_mapper",
+                        "task": "relationship_classification"
+                    }
+                )
+                return response_data['data']['choices'][0]['message']['content'].strip()
+            elif self.openai_client:
+                # Direct OpenAI call
+                response = await asyncio.to_thread(
+                    self.openai_client.chat.completions.create,
+                    model="gpt-3.5-turbo",
+                    messages=messages,
+                    temperature=0.1,
+                    max_tokens=20
+                )
+                return response.choices[0].message.content.strip()
             elif self.anthropic_client:
-                if self.use_lava:
-                    # Route through Lava
-                    response_data = await self.lava_service.forward_anthropic_request(
-                        messages=messages,
-                        model="claude-3-haiku-20240307",
-                        max_tokens=20,
-                        temperature=0.1,
-                        metadata={
-                            "service": "synapse_mapper",
-                            "task": "relationship_classification"
-                        }
-                    )
-                    return response_data['data']['content'][0]['text'].strip()
-                else:
-                    # Direct Anthropic call
-                    response = await asyncio.to_thread(
-                        self.anthropic_client.messages.create,
-                        model="claude-3-haiku-20240307",
-                        max_tokens=20,
-                        messages=messages
-                    )
-                    return response.content[0].text.strip()
+                # Direct Anthropic call
+                response = await asyncio.to_thread(
+                    self.anthropic_client.messages.create,
+                    model="claude-3-haiku-20240307",
+                    max_tokens=20,
+                    messages=messages
+                )
+                return response.content[0].text.strip()
         except Exception as e:
             print(f"LLM classification failed: {e}")
             return None

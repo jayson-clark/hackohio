@@ -18,6 +18,7 @@ class GraphConversationalAgent:
     def get_neighbors(self, entity: str, depth: int = 1) -> Dict[str, Any]:
         if entity not in self.graph:
             return {"entity": entity, "neighbors": []}
+        
         visited = {entity}
         frontier = {entity}
         layers = []
@@ -42,30 +43,41 @@ class GraphConversationalAgent:
             frontier = next_frontier
             if not frontier:
                 break
+        
         return {"entity": entity, "layers": layers}
 
     def shortest_path(self, source: str, target: str, k_paths: int = 1) -> Dict[str, Any]:
+        """Find shortest path using Dijkstra's algorithm with edge weights"""
         if source not in self.graph or target not in self.graph:
             return {"paths": []}
         try:
-            # Use simple shortest paths by hop count
-            paths = list(nx.all_shortest_paths(self.graph, source=source, target=target))
+            # Use Dijkstra's algorithm: shortest path by weight (not hop count)
+            # NetworkX uses Dijkstra by default for weighted graphs
+            path = nx.shortest_path(self.graph, source=source, target=target, weight='weight')
+            paths = [path]  # Just return the single shortest weighted path
         except (nx.NetworkXNoPath, nx.NodeNotFound):
             return {"paths": []}
-        paths = paths[: max(1, k_paths)]
+        
         detailed = []
         for path in paths:
             edges = []
+            total_weight = 0
             for a, b in zip(path, path[1:]):
                 data = self.graph.edges[a, b]
+                weight = data.get("weight", 1.0)
+                total_weight += weight
                 edges.append({
                     "source": a,
                     "target": b,
-                    "weight": data.get("weight", 1.0),
+                    "weight": weight,
                     "relationship_type": data.get("relationship_type", "CO_OCCURRENCE"),
                     "evidence": data.get("evidence", [])[:3],
                 })
-            detailed.append({"nodes": path, "edges": edges})
+            detailed.append({
+                "nodes": path, 
+                "edges": edges,
+                "total_weight": total_weight
+            })
         return {"paths": detailed}
 
     def common_connections(self, entities: List[str], min_degree: int = 1) -> Dict[str, Any]:
@@ -100,11 +112,17 @@ class GraphConversationalAgent:
     
     async def chat(self, user_message: str, conversation_history: Optional[List[Dict]] = None) -> Dict[str, Any]:
         """
-        LLM-powered conversational interface for graph queries
-        Uses tool calling to interact with the graph intelligently
+        Conversational interface for graph queries
+        Uses pattern matching first, falls back to LLM for complex queries
         """
+        # Try pattern matching first (fast, no cost)
+        pattern_result = self._try_pattern_match(user_message)
+        if pattern_result:
+            return pattern_result
+        
+        # If pattern matching failed and LLM is available, use it
         if not self.llm_service or not self.llm_service.enabled:
-            # Fallback to pattern matching if LLM not available
+            # No LLM and pattern matching failed
             return self._pattern_match_chat(user_message)
         
         # Prepare graph context
@@ -228,30 +246,71 @@ If no tool is needed, return:
                 }
                 
         except Exception as e:
-            print(f"LLM chat error: {e}")
             return self._pattern_match_chat(user_message)
     
     def _match_entities(self, query_entities: List[str]) -> List[str]:
-        """Match query entities to actual graph nodes (case-insensitive)"""
+        """Match query entities to actual graph nodes with fuzzy matching"""
         matched = []
         graph_nodes = list(self.graph.nodes())
         
         for query_entity in query_entities:
             query_lower = query_entity.lower().strip()
+            best_match = None
+            best_score = 0
             
-            # Exact match
+            # Try exact match first
             for node in graph_nodes:
                 if node.lower() == query_lower:
                     matched.append(node)
                     break
             else:
-                # Partial match
+                # Try substring match
                 for node in graph_nodes:
-                    if query_lower in node.lower() or node.lower() in query_lower:
-                        matched.append(node)
-                        break
+                    node_lower = node.lower()
+                    if query_lower in node_lower:
+                        score = len(query_lower) / len(node_lower)
+                        if score > best_score:
+                            best_score = score
+                            best_match = node
+                    elif node_lower in query_lower:
+                        score = len(node_lower) / len(query_lower)
+                        if score > best_score:
+                            best_score = score
+                            best_match = node
+                
+                # Try fuzzy matching by checking if words overlap
+                if not best_match:
+                    query_words = set(query_lower.split())
+                    for node in graph_nodes:
+                        node_words = set(node.lower().split())
+                        overlap = query_words & node_words
+                        if overlap:
+                            score = len(overlap) / max(len(query_words), len(node_words))
+                            if score > best_score:
+                                best_score = score
+                                best_match = node
+                
+                if best_match and best_score > 0.3:  # At least 30% similarity
+                    matched.append(best_match)
         
         return matched
+    
+    def _find_similar_entities(self, query: str, limit: int = 5) -> List[str]:
+        """Find similar entities for suggestions"""
+        query_lower = query.lower().strip()
+        graph_nodes = list(self.graph.nodes())
+        suggestions = []
+        
+        for node in graph_nodes:
+            node_lower = node.lower()
+            # Check if any words match
+            if any(word in node_lower for word in query_lower.split()):
+                suggestions.append(node)
+            # Check if starts with same letter
+            elif query_lower and node_lower.startswith(query_lower[0]):
+                suggestions.append(node)
+        
+        return suggestions[:limit]
     
     def _format_tool_result(self, tool_name: str, result: Dict, explanation: str) -> Dict[str, Any]:
         """Format tool execution result for chat response"""
@@ -293,11 +352,277 @@ If no tool is needed, return:
         
         return response
     
-    def _pattern_match_chat(self, message: str) -> Dict[str, Any]:
-        """Fallback pattern matching for basic queries"""
+    def _try_pattern_match(self, message: str) -> Optional[Dict[str, Any]]:
+        """Try to answer using pattern matching. Returns None if it can't handle the query."""
         text = message.lower().strip()
         
-        # Basic patterns
+        # Only handle queries that clearly match our patterns
+        # Stats queries
+        if "how many" in text and ("nodes" in text or "entities" in text):
+            return {
+                "answer": f"The graph has {self.graph.number_of_nodes()} nodes.",
+                "tool_calls": [],
+                "relevant_nodes": [],
+                "relevant_edges": [],
+                "citations": []
+            }
+        elif "how many" in text and ("edges" in text or "connections" in text or "relationships" in text):
+            return {
+                "answer": f"The graph has {self.graph.number_of_edges()} edges.",
+                "tool_calls": [],
+                "relevant_nodes": [],
+                "relevant_edges": [],
+                "citations": []
+            }
+        
+        # Neighbor queries
+        if "neighbor" in text:
+            for pattern in ["neighbors of ", "neighbor of "]:
+                if pattern in text:
+                    entity_query = text.split(pattern, 1)[1].strip().rstrip("?.,!")
+                    matched = self._match_entities([entity_query])
+                    if matched:
+                        result = self.get_neighbors(matched[0], depth=1)
+                        layers = result.get("layers", [])
+                        if layers:
+                            neighbors = list({item["target"] for item in layers[0]})
+                            match_note = f" (matched '{entity_query}' to '{matched[0]}')" if matched[0].lower() != entity_query.lower() else ""
+                            return {
+                                "answer": f"Neighbors of {result['entity']}{match_note}:\n{', '.join(neighbors[:20])}",
+                                "tool_calls": ["get_neighbors"],
+                                "relevant_nodes": [result["entity"]] + neighbors[:20],
+                                "relevant_edges": [[result["entity"], t] for t in neighbors[:20]],
+                                "citations": [e for item in layers[0] for e in item.get("evidence", [])][:3]
+                            }
+                        else:
+                            return {
+                                "answer": f"'{matched[0]}' has no neighbors in the graph.",
+                                "tool_calls": [],
+                                "relevant_nodes": [],
+                                "relevant_edges": [],
+                                "citations": []
+                            }
+                    else:
+                        # No match found - provide suggestions
+                        suggestions = self._find_similar_entities(entity_query, limit=5)
+                        if suggestions:
+                            return {
+                                "answer": f"❌ Couldn't find '{entity_query}' in the graph.\n\n💡 Did you mean one of these?\n• " + "\n• ".join(suggestions),
+                                "tool_calls": [],
+                                "relevant_nodes": suggestions,
+                                "relevant_edges": [],
+                                "citations": []
+                            }
+                        else:
+                            return {
+                                "answer": f"❌ Entity '{entity_query}' not found in the graph.\n\n📊 The graph has {self.graph.number_of_nodes()} nodes. Try a different entity name.",
+                                "tool_calls": [],
+                                "relevant_nodes": [],
+                                "relevant_edges": [],
+                                "citations": []
+                            }
+        
+        # Path queries
+        if ("path" in text or "connect" in text) and " between " in text and " and " in text:
+            try:
+                between_part = text.split(" between ", 1)[1]
+                parts = between_part.split(" and ", 1)
+                entity_a = parts[0].strip().rstrip("?.,!")
+                entity_b = parts[1].strip().rstrip("?.,!")
+                
+                matched = self._match_entities([entity_a, entity_b])
+                if len(matched) >= 2:
+                    result = self.shortest_path(matched[0], matched[1])
+                    paths = result.get("paths", [])
+                    if paths:
+                        path = paths[0]
+                        nodes = path["nodes"]
+                        edges = path["edges"]
+                        total_weight = path.get("total_weight", 0)
+                        return {
+                            "answer": f"Shortest path from {matched[0]} to {matched[1]} (weight: {total_weight:.1f}):\n{' → '.join(nodes)}",
+                            "tool_calls": ["shortest_path"],
+                            "relevant_nodes": nodes,
+                            "relevant_edges": [[e["source"], e["target"]] for e in edges],
+                            "citations": [evi for e in edges for evi in e.get("evidence", [])][:3]
+                        }
+                    else:
+                        return {
+                            "answer": f"No path found between {matched[0]} and {matched[1]}.",
+                            "tool_calls": [],
+                            "relevant_nodes": [],
+                            "relevant_edges": [],
+                            "citations": []
+                        }
+            except:
+                pass
+        
+        # Common connections queries
+        if "common" in text or "connects" in text:
+            entities_text = text
+            for prefix in ["common connections ", "what connects ", "connects "]:
+                if prefix in text:
+                    entities_text = text.split(prefix, 1)[1].strip().rstrip("?.,!")
+                    break
+            
+            import re
+            entity_names = re.split(r',|\s+and\s+', entities_text)
+            entity_names = [e.strip() for e in entity_names if e.strip()]
+            
+            if len(entity_names) >= 2:
+                matched = self._match_entities(entity_names)
+                if len(matched) >= 2:
+                    result = self.common_connections(matched)
+                    commons = result.get("common", [])
+                    if commons:
+                        return {
+                            "answer": f"Common connections for {', '.join(matched)}: {', '.join([c['entity'] for c in commons[:15]])}",
+                            "tool_calls": ["common_connections"],
+                            "relevant_nodes": matched + [c["entity"] for c in commons[:15]],
+                            "relevant_edges": [],
+                            "citations": []
+                        }
+        
+        # Return None if pattern matching can't handle it
+        return None
+    
+    def _pattern_match_chat(self, message: str) -> Dict[str, Any]:
+        """Fallback help message when no pattern matches and no LLM"""
+        # Provide helpful guidance
+        return {
+            "answer": f"I can help you explore the graph with {self.graph.number_of_nodes()} nodes! Try:\n- 'What are the neighbors of X?'\n- 'Find path between A and B'\n- 'What connects A, B, and C?'\n- 'How many nodes are there?'",
+            "tool_calls": [],
+            "relevant_nodes": [],
+            "relevant_edges": [],
+            "citations": []
+        }
+    
+    def _old_pattern_match_chat(self, message: str) -> Dict[str, Any]:
+        """OLD: Fallback for when neither pattern matching nor LLM can help"""
+        text = message.lower().strip()
+        
+        print(f"\n🤖 DEBUG: Pattern matching fallback")
+        print(f"   User message: '{message}'")
+        print(f"   Lowercased text: '{text}'")
+        
+        # Extract entity names from common patterns
+        graph_nodes = list(self.graph.nodes())
+        
+        # Pattern: "neighbors of X" or "what are neighbors of X"
+        if "neighbor" in text:
+            print(f"   ✅ Detected 'neighbor' pattern")
+            # Try to extract entity name
+            for pattern in ["neighbors of ", "neighbor of "]:
+                if pattern in text:
+                    entity_query = text.split(pattern, 1)[1].strip().rstrip("?.,!")
+                    print(f"   📝 Extracted entity query: '{entity_query}'")
+                    # Match to actual node with fuzzy matching
+                    matched = self._match_entities([entity_query])
+                    if matched:
+                        result = self.get_neighbors(matched[0], depth=1)
+                        layers = result.get("layers", [])
+                        if layers:
+                            neighbors = list({item["target"] for item in layers[0]})
+                            match_note = f" (matched '{entity_query}' to '{matched[0]}')" if matched[0].lower() != entity_query.lower() else ""
+                            return {
+                                "answer": f"Neighbors of {result['entity']}{match_note}:\n{', '.join(neighbors[:20])}",
+                                "tool_calls": ["get_neighbors"],
+                                "relevant_nodes": [result["entity"]] + neighbors[:20],
+                                "relevant_edges": [[result["entity"], t] for t in neighbors[:20]],
+                                "citations": [e for item in layers[0] for e in item.get("evidence", [])][:3]
+                            }
+                        else:
+                            return {
+                                "answer": f"'{matched[0]}' has no neighbors in the graph.",
+                                "tool_calls": [],
+                                "relevant_nodes": [],
+                                "relevant_edges": [],
+                                "citations": []
+                            }
+                    else:
+                        # No match found - provide suggestions
+                        suggestions = self._find_similar_entities(entity_query, limit=5)
+                        if suggestions:
+                            return {
+                                "answer": f"❌ Couldn't find '{entity_query}' in the graph.\n\n💡 Did you mean one of these?\n• " + "\n• ".join(suggestions),
+                                "tool_calls": [],
+                                "relevant_nodes": suggestions,
+                                "relevant_edges": [],
+                                "citations": []
+                            }
+                        else:
+                            return {
+                                "answer": f"❌ Entity '{entity_query}' not found in the graph.\n\n📊 The graph has {self.graph.number_of_nodes()} nodes. Try a different entity name.",
+                                "tool_calls": [],
+                                "relevant_nodes": [],
+                                "relevant_edges": [],
+                                "citations": []
+                            }
+        
+        # Pattern: "path between A and B" or "find path between A and B"
+        if ("path" in text or "connect" in text) and " between " in text and " and " in text:
+            try:
+                # Extract entities
+                between_part = text.split(" between ", 1)[1]
+                parts = between_part.split(" and ", 1)
+                entity_a = parts[0].strip().rstrip("?.,!")
+                entity_b = parts[1].strip().rstrip("?.,!")
+                
+                matched = self._match_entities([entity_a, entity_b])
+                if len(matched) >= 2:
+                    result = self.shortest_path(matched[0], matched[1])
+                    paths = result.get("paths", [])
+                    if paths:
+                        path = paths[0]
+                        nodes = path["nodes"]
+                        edges = path["edges"]
+                        return {
+                            "answer": f"Shortest path from {matched[0]} to {matched[1]}: {' → '.join(nodes)}",
+                            "tool_calls": ["shortest_path"],
+                            "relevant_nodes": nodes,
+                            "relevant_edges": [[e["source"], e["target"]] for e in edges],
+                            "citations": [evi for e in edges for evi in e.get("evidence", [])][:3]
+                        }
+                    else:
+                        return {
+                            "answer": f"No path found between {matched[0]} and {matched[1]}.",
+                            "tool_calls": [],
+                            "relevant_nodes": [],
+                            "relevant_edges": [],
+                            "citations": []
+                        }
+            except:
+                pass
+        
+        # Pattern: "common connections" or "what connects A, B, C"
+        if "common" in text or "connects" in text:
+            # Try to find comma-separated entities or "and" separated
+            entities_text = text
+            for prefix in ["common connections ", "what connects ", "connects "]:
+                if prefix in text:
+                    entities_text = text.split(prefix, 1)[1].strip().rstrip("?.,!")
+                    break
+            
+            # Split by comma or "and"
+            import re
+            entity_names = re.split(r',|\s+and\s+', entities_text)
+            entity_names = [e.strip() for e in entity_names if e.strip()]
+            
+            if len(entity_names) >= 2:
+                matched = self._match_entities(entity_names)
+                if len(matched) >= 2:
+                    result = self.common_connections(matched)
+                    commons = result.get("common", [])
+                    if commons:
+                        return {
+                            "answer": f"Common connections for {', '.join(matched)}: {', '.join([c['entity'] for c in commons[:15]])}",
+                            "tool_calls": ["common_connections"],
+                            "relevant_nodes": matched + [c["entity"] for c in commons[:15]],
+                            "relevant_edges": [],
+                            "citations": []
+                        }
+        
+        # Stats queries
         if "how many" in text and "nodes" in text:
             return {
                 "answer": f"The graph has {self.graph.number_of_nodes()} nodes.",
@@ -314,13 +639,14 @@ If no tool is needed, return:
                 "relevant_edges": [],
                 "citations": []
             }
-        else:
-            return {
-                "answer": "I can help you explore the graph! Try asking:\n- 'What are the neighbors of X?'\n- 'Find path between A and B'\n- 'What connects A, B, and C?'",
-                "tool_calls": [],
-                "relevant_nodes": [],
-                "relevant_edges": [],
-                "citations": []
-            }
+        
+        # Default help
+        return {
+            "answer": f"I can help you explore the graph with {self.graph.number_of_nodes()} nodes! Try:\n- 'What are the neighbors of X?'\n- 'Find path between A and B'\n- 'What connects A, B, and C?'\n\n💡 Enable LLM for natural language understanding!",
+            "tool_calls": [],
+            "relevant_nodes": [],
+            "relevant_edges": [],
+            "citations": []
+        }
 
 
