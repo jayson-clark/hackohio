@@ -1,6 +1,8 @@
 import { useEffect } from 'react';
 import { Toaster } from 'react-hot-toast';
+import { GoogleOAuthProvider } from '@react-oauth/google';
 import { useStore } from './store/useStore';
+import { useAuth, AuthProvider } from './contexts/AuthContext';
 import { ForceGraph2DView } from './components/ForceGraph2DView';
 import { ForceGraph3DView } from './components/ForceGraph3DView';
 import { UploadPanel } from './components/UploadPanel';
@@ -8,9 +10,12 @@ import { ProcessingOverlay } from './components/ProcessingOverlay';
 import { Sidebar } from './components/Sidebar';
 import { ChatPanel } from './components/ChatPanel';
 import { NodeDetails } from './components/NodeDetails';
+import { LoginComponent } from './components/LoginComponent';
+import { UserProfile } from './components/UserProfile';
 
-function App() {
+function AppContent() {
   const { graphData, viewMode, filterOptions, setFilteredGraphData } = useStore();
+  const { isAuthenticated, isLoading } = useAuth();
 
   // Apply filters when filter options or graph data change
   useEffect(() => {
@@ -84,6 +89,18 @@ function App() {
     setFilteredGraphData(filtered);
   }, [graphData, filterOptions, setFilteredGraphData]);
 
+  if (isLoading) {
+    return (
+      <div className="w-full h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 flex items-center justify-center">
+        <div className="text-white text-lg">Loading...</div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <LoginComponent />;
+  }
+
   return (
     <div className="w-full h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 overflow-hidden">
       <Toaster
@@ -109,6 +126,11 @@ function App() {
         }}
       />
 
+      {/* Header with user profile */}
+      <div className="absolute top-4 right-4 z-50">
+        <UserProfile />
+      </div>
+
       {!graphData ? (
         <div className="w-full h-full flex items-center justify-center p-4">
           <UploadPanel />
@@ -131,6 +153,32 @@ function App() {
 
       <ProcessingOverlay />
     </div>
+  );
+}
+
+function App() {
+  // Get Google OAuth client ID from environment variables
+  const clientId = (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID || '';
+
+  if (!clientId) {
+    return (
+      <div className="w-full h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 flex items-center justify-center">
+        <div className="text-center text-white">
+          <h2 className="text-2xl font-bold mb-4">Configuration Error</h2>
+          <p className="text-gray-300">
+            Google OAuth client ID is not configured. Please set VITE_GOOGLE_CLIENT_ID in your environment variables.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <GoogleOAuthProvider clientId={clientId}>
+      <AuthProvider>
+        <AppContent />
+      </AuthProvider>
+    </GoogleOAuthProvider>
   );
 }
 
