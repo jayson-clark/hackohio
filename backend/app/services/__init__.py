@@ -7,6 +7,7 @@ from .graph_agent import GraphConversationalAgent
 from .hypothesis_agent import HypothesisAgent
 from .pubmed_service import PubMedService
 from .ctgov_service import ClinicalTrialsService
+from .lava_service import LavaService
 
 __all__ = [
     "PDFProcessor",
@@ -18,5 +19,6 @@ __all__ = [
     "HypothesisAgent",
     "PubMedService",
     "ClinicalTrialsService",
+    "LavaService",
 ]
 

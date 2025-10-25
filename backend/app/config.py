@@ -15,6 +15,12 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     anthropic_api_key: str = ""
     
+    # Lava Payments Configuration
+    lava_secret_key: str = ""
+    lava_connection_secret: str = ""
+    lava_product_secret: str = ""
+    enable_lava: bool = False
+    
     # Processing Configuration
     max_upload_size_mb: int = 100
     max_concurrent_processing: int = 4

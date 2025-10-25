@@ -1,6 +1,7 @@
 from typing import List, Dict, Optional
 import asyncio
 from app.config import settings
+from app.services.lava_service import LavaService
 
 # Optional LLM imports
 try:
@@ -20,12 +21,15 @@ class LLMService:
     """
     Optional LLM-powered relationship extraction and classification
     Enhances basic co-occurrence with semantic understanding
+    Routes through Lava Payments for usage-based billing when enabled
     """
     
     def __init__(self):
         self.enabled = settings.enable_llm_extraction
         self.openai_client = None
         self.anthropic_client = None
+        self.lava_service = LavaService()
+        self.use_lava = self.lava_service.enabled
         
         if self.enabled:
             if OPENAI_AVAILABLE and settings.openai_api_key:
@@ -82,41 +86,79 @@ If no clear relationships exist, return an empty array.
         return prompt
     
     async def _extract_with_openai(self, prompt: str) -> List[Dict[str, any]]:
-        """Extract using OpenAI GPT"""
+        """Extract using OpenAI GPT (via Lava if enabled)"""
         try:
-            response = await asyncio.to_thread(
-                self.openai_client.chat.completions.create,
-                model="gpt-4-turbo-preview",
-                messages=[
-                    {"role": "system", "content": "You are a biomedical relationship extraction expert."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.3,
-                response_format={"type": "json_object"}
-            )
+            messages = [
+                {"role": "system", "content": "You are a biomedical relationship extraction expert."},
+                {"role": "user", "content": prompt}
+            ]
             
-            import json
-            result = json.loads(response.choices[0].message.content)
-            return result.get("relationships", [])
+            if self.use_lava:
+                # Route through Lava for usage tracking
+                response_data = await self.lava_service.forward_openai_request(
+                    messages=messages,
+                    model="gpt-4-turbo-preview",
+                    temperature=0.3,
+                    response_format={"type": "json_object"},
+                    metadata={
+                        "service": "synapse_mapper",
+                        "task": "relationship_extraction"
+                    }
+                )
+                # Extract content from Lava response
+                import json
+                result = json.loads(response_data['data']['choices'][0]['message']['content'])
+                return result.get("relationships", [])
+            else:
+                # Direct OpenAI call
+                response = await asyncio.to_thread(
+                    self.openai_client.chat.completions.create,
+                    model="gpt-4-turbo-preview",
+                    messages=messages,
+                    temperature=0.3,
+                    response_format={"type": "json_object"}
+                )
+                
+                import json
+                result = json.loads(response.choices[0].message.content)
+                return result.get("relationships", [])
         except Exception as e:
             print(f"OpenAI extraction error: {e}")
             return []
     
     async def _extract_with_anthropic(self, prompt: str) -> List[Dict[str, any]]:
-        """Extract using Anthropic Claude"""
+        """Extract using Anthropic Claude (via Lava if enabled)"""
         try:
-            response = await asyncio.to_thread(
-                self.anthropic_client.messages.create,
-                model="claude-3-sonnet-20240229",
-                max_tokens=1024,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ]
-            )
+            messages = [{"role": "user", "content": prompt}]
             
-            import json
-            result = json.loads(response.content[0].text)
-            return result if isinstance(result, list) else result.get("relationships", [])
+            if self.use_lava:
+                # Route through Lava for usage tracking
+                response_data = await self.lava_service.forward_anthropic_request(
+                    messages=messages,
+                    model="claude-3-sonnet-20240229",
+                    max_tokens=1024,
+                    temperature=0.3,
+                    metadata={
+                        "service": "synapse_mapper",
+                        "task": "relationship_extraction"
+                    }
+                )
+                # Extract content from Lava response
+                import json
+                result = json.loads(response_data['data']['content'][0]['text'])
+                return result if isinstance(result, list) else result.get("relationships", [])
+            else:
+                # Direct Anthropic call
+                response = await asyncio.to_thread(
+                    self.anthropic_client.messages.create,
+                    model="claude-3-sonnet-20240229",
+                    max_tokens=1024,
+                    messages=messages
+                )
+                
+                import json
+                result = json.loads(response.content[0].text)
+                return result if isinstance(result, list) else result.get("relationships", [])
         except Exception as e:
             print(f"Anthropic extraction error: {e}")
             return []
@@ -155,23 +197,55 @@ Return only the relationship type, nothing else.
 """
         
         try:
+            messages = [{"role": "user", "content": prompt}]
+            
             if self.openai_client:
-                response = await asyncio.to_thread(
-                    self.openai_client.chat.completions.create,
-                    model="gpt-3.5-turbo",
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.1,
-                    max_tokens=20
-                )
-                return response.choices[0].message.content.strip()
+                if self.use_lava:
+                    # Route through Lava
+                    response_data = await self.lava_service.forward_openai_request(
+                        messages=messages,
+                        model="gpt-3.5-turbo",
+                        temperature=0.1,
+                        max_tokens=20,
+                        metadata={
+                            "service": "synapse_mapper",
+                            "task": "relationship_classification"
+                        }
+                    )
+                    return response_data['data']['choices'][0]['message']['content'].strip()
+                else:
+                    # Direct OpenAI call
+                    response = await asyncio.to_thread(
+                        self.openai_client.chat.completions.create,
+                        model="gpt-3.5-turbo",
+                        messages=messages,
+                        temperature=0.1,
+                        max_tokens=20
+                    )
+                    return response.choices[0].message.content.strip()
             elif self.anthropic_client:
-                response = await asyncio.to_thread(
-                    self.anthropic_client.messages.create,
-                    model="claude-3-haiku-20240307",
-                    max_tokens=20,
-                    messages=[{"role": "user", "content": prompt}]
-                )
-                return response.content[0].text.strip()
+                if self.use_lava:
+                    # Route through Lava
+                    response_data = await self.lava_service.forward_anthropic_request(
+                        messages=messages,
+                        model="claude-3-haiku-20240307",
+                        max_tokens=20,
+                        temperature=0.1,
+                        metadata={
+                            "service": "synapse_mapper",
+                            "task": "relationship_classification"
+                        }
+                    )
+                    return response_data['data']['content'][0]['text'].strip()
+                else:
+                    # Direct Anthropic call
+                    response = await asyncio.to_thread(
+                        self.anthropic_client.messages.create,
+                        model="claude-3-haiku-20240307",
+                        max_tokens=20,
+                        messages=messages
+                    )
+                    return response.content[0].text.strip()
         except Exception as e:
             print(f"LLM classification failed: {e}")
             return None

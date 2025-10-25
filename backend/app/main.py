@@ -28,6 +28,7 @@ from app.services import (
     HypothesisAgent,
     PubMedService,
     ClinicalTrialsService,
+    LavaService,
 )
 from sqlalchemy.orm import Session
 from app.models import (
@@ -72,6 +73,7 @@ graph_builder = GraphBuilder()
 llm_service = LLMService()
 pubmed_service = PubMedService()
 ctgov_service = ClinicalTrialsService()
+lava_service = LavaService()
 
 # Storage for processing jobs
 processing_jobs = {}
@@ -345,6 +347,7 @@ async def chat_with_graph(payload: dict):
         # Accept flexible JSON payload to avoid validation errors from clients
         message = (payload or {}).get("message", "")
         graph = (payload or {}).get("graph", {})
+        conversation_history = (payload or {}).get("conversation_history", [])
         nodes = graph.get("nodes", [])
         edges = graph.get("edges", [])
 
@@ -369,102 +372,21 @@ async def chat_with_graph(payload: dict):
             })
         graph_builder.build_graph(entities, relationships)
 
-        agent = GraphConversationalAgent(graph_builder.graph)
-        text = str(message).strip()
-        answer = ""
-        citations: List[str] = []
-        relevant_nodes: List[str] = []
-        relevant_edges: List[List[str]] = []
-        tool_calls: List[str] = []
-
-        if "shortest path" in text.lower() and " between " in text.lower():
-            try:
-                lower = text.lower()
-                seg = lower.split(" between ", 1)[1]
-                parts = seg.split(" and ")
-                a = parts[0].strip()
-                b = parts[1].strip()
-                def best_match(name: str) -> str:
-                    names = [n for n in graph_builder.graph.nodes()]
-                    for n in names:
-                        if n.lower() == name:
-                            return n
-                    for n in names:
-                        if name in n.lower():
-                            return n
-                    return name
-                a_real = best_match(a)
-                b_real = best_match(b)
-                res = agent.shortest_path(a_real, b_real)
-                tool_calls.append("shortest_path")
-                if res["paths"]:
-                    path = res["paths"][0]
-                    nodes = path["nodes"]
-                    edges = path["edges"]
-                    answer = f"Shortest path: {' → '.join(nodes)}"
-                    relevant_nodes = nodes
-                    relevant_edges = [[e["source"], e["target"]] for e in edges]
-                    citations = [evi for e in edges for evi in e.get("evidence", [])][:3]
-                else:
-                    answer = "No path found between the specified entities."
-            except Exception:
-                answer = "Could not parse entities for shortest path. Use 'shortest path between A and B'."
-        elif text.lower().startswith("neighbors of "):
-            name = text[len("neighbors of "):].strip()
-            target = None
-            for n in graph_builder.graph.nodes():
-                if n.lower() == name.lower():
-                    target = n
-                    break
-            res = agent.get_neighbors(target or name, depth=1)
-            tool_calls.append("get_neighbors")
-            layers = res.get("layers", [])
-            if layers:
-                neighbors = list({item["target"] for item in layers[0]})
-                answer = f"Neighbors of {res['entity']}: {', '.join(neighbors[:20])}"
-                relevant_nodes = [res["entity"], *neighbors]
-                relevant_edges = [[res["entity"], t] for t in neighbors]
-                citations = [e for item in layers[0] for e in item.get("evidence", [])][:3]
-            else:
-                answer = f"No neighbors found for {res['entity']}."
-        elif text.lower().startswith("common connections "):
-            try:
-                names = [s.strip() for s in text.split(" ", 2)[2].split(",")]
-                real = []
-                node_names = [n for n in graph_builder.graph.nodes()]
-                for q in names:
-                    m = None
-                    for n in node_names:
-                        if n.lower() == q.lower():
-                            m = n
-                            break
-                    real.append(m or q)
-                res = agent.common_connections(real)
-                tool_calls.append("common_connections")
-                commons = res.get("common", [])
-                if commons:
-                    answer = "Common connections: " + ", ".join([c["entity"] for c in commons[:20]])
-                    relevant_nodes = real + [c["entity"] for c in commons]
-                else:
-                    answer = "No common connections found."
-            except Exception:
-                answer = "Use 'common connections A, B, C'"
-        else:
-            stats = payload.graph.metadata or {}
-            answer = (
-                f"Graph has {stats.get('total_nodes', len(payload.graph.nodes))} nodes and "
-                f"{stats.get('total_edges', len(payload.graph.edges))} edges. "
-                "Ask: 'shortest path between A and B', 'neighbors of X', or 'common connections A, B'."
-            )
-
+        # Create agent with LLM service for intelligent chat
+        agent = GraphConversationalAgent(graph_builder.graph, llm_service=llm_service)
+        
+        # Use LLM-powered chat if available, otherwise fallback to pattern matching
+        result = await agent.chat(message, conversation_history)
+        
         return ChatResponse(
-            answer=answer,
-            citations=citations,
-            relevant_nodes=relevant_nodes,
-            relevant_edges=relevant_edges,
-            tool_calls=tool_calls,
+            answer=result.get("answer", ""),
+            citations=result.get("citations", []),
+            relevant_nodes=result.get("relevant_nodes", []),
+            relevant_edges=result.get("relevant_edges", []),
+            tool_calls=result.get("tool_calls", []),
         )
     except Exception as e:
+        print(f"Chat error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -833,6 +755,56 @@ async def discover_trials(req: TrialDiscoveryRequest):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==== Lava Payments Endpoints ====
+
+@app.get("/api/lava/usage")
+async def get_lava_usage():
+    """Get LLM usage statistics from Lava Payments"""
+    try:
+        if not lava_service.enabled:
+            return {"enabled": False, "message": "Lava Payments is not configured"}
+        
+        usage = await lava_service.get_usage_stats()
+        return {"enabled": True, **usage}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/lava/requests")
+async def list_lava_requests(
+    limit: int = 50,
+    cursor: Optional[str] = None,
+    metadata_filter: Optional[str] = None
+):
+    """List tracked API requests from Lava"""
+    try:
+        if not lava_service.enabled:
+            return {"enabled": False, "message": "Lava Payments is not configured"}
+        
+        import json
+        metadata = json.loads(metadata_filter) if metadata_filter else None
+        
+        requests = await lava_service.list_requests(
+            limit=limit,
+            cursor=cursor,
+            metadata=metadata
+        )
+        return {"enabled": True, **requests}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/lava/status")
+async def get_lava_status():
+    """Check Lava Payments configuration status"""
+    return {
+        "enabled": lava_service.enabled,
+        "configured": bool(settings.lava_secret_key),
+        "has_connection_secret": bool(settings.lava_connection_secret),
+        "has_product_secret": bool(settings.lava_product_secret),
+    }
 
 
 if __name__ == "__main__":
