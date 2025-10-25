@@ -3,6 +3,7 @@ import { Toaster } from 'react-hot-toast';
 import { GoogleOAuthProvider } from '@react-oauth/google';
 import { useStore } from './store/useStore';
 import { useAuth, AuthProvider } from './contexts/AuthContext';
+import { apiService } from './services/api';
 import { ForceGraph2DView } from './components/ForceGraph2DView';
 import { ForceGraph3DView } from './components/ForceGraph3DView';
 import { UploadPanel } from './components/UploadPanel';
@@ -12,9 +13,25 @@ import { ChatPanel } from './components/ChatPanel';
 import { NodeDetails } from './components/NodeDetails';
 import { LoginComponent } from './components/LoginComponent';
 import { UserProfile } from './components/UserProfile';
+import { ProjectSelection } from './components/ProjectSelection';
 
 function AppContent() {
-  const { graphData, viewMode, filterOptions, setFilteredGraphData } = useStore();
+  const { 
+    graphData, 
+    viewMode, 
+    filterOptions, 
+    setFilteredGraphData,
+    currentProject,
+    showProjectSelection,
+    showUploadPanel,
+    isLoadingProject,
+    setCurrentProject,
+    setShowProjectSelection,
+    setShowUploadPanel,
+    setIsLoadingProject,
+    setGraphData,
+    setPdfs
+  } = useStore();
   const { isAuthenticated, isLoading } = useAuth();
 
   // Apply filters when filter options or graph data change
@@ -99,6 +116,100 @@ function AppContent() {
 
   if (!isAuthenticated) {
     return <LoginComponent />;
+  }
+
+  // Show loading state while project is being loaded
+  if (isLoadingProject) {
+    return (
+      <div className="w-full h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 flex items-center justify-center">
+        <div className="text-center text-white">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4"></div>
+          <p className="text-lg">Loading project...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show upload panel if explicitly requested
+  if (showUploadPanel) {
+    return (
+      <div className="w-full h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 overflow-hidden">
+        <Toaster
+          position="top-right"
+          toastOptions={{
+            style: {
+              background: '#1f2937',
+              color: '#fff',
+              border: '1px solid #374151',
+            },
+            success: {
+              iconTheme: {
+                primary: '#10b981',
+                secondary: '#fff',
+              },
+            },
+            error: {
+              iconTheme: {
+                primary: '#ef4444',
+                secondary: '#fff',
+              },
+            },
+          }}
+        />
+
+        {/* Header with user profile */}
+        <div className="absolute top-4 right-4 z-50">
+          <UserProfile />
+        </div>
+
+        <div className="w-full h-full flex items-center justify-center p-4">
+          <UploadPanel />
+        </div>
+      </div>
+    );
+  }
+
+  // Show project selection if no project is selected or if explicitly requested
+  if (!currentProject || showProjectSelection) {
+    return (
+      <ProjectSelection
+        onProjectSelect={async (project) => {
+          // Set project immediately to prevent flash
+          setCurrentProject(project);
+          setShowProjectSelection(false);
+          setShowUploadPanel(false);
+          setIsLoadingProject(true);
+          
+          // Load project data
+          try {
+            const pdfs = await apiService.getProjectPdfs(project.project_id);
+            setPdfs(pdfs);
+            
+            // Load project graph
+            const graphData = await apiService.getProjectGraph(project.project_id);
+            setGraphData(graphData);
+          } catch (error) {
+            console.error('Error loading project:', error);
+          } finally {
+            setIsLoadingProject(false);
+          }
+        }}
+        onProjectDeleted={() => {
+          // If the current project was deleted, clear everything and show project selection
+          setCurrentProject(null);
+          setGraphData(null);
+          setPdfs([]);
+          setShowProjectSelection(true);
+        }}
+        onCreateNew={() => {
+          setShowProjectSelection(false);
+          setShowUploadPanel(true);
+          setCurrentProject(null);
+          setGraphData(null);
+          setPdfs([]);
+        }}
+      />
+    );
   }
 
   return (

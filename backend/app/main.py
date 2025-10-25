@@ -7,6 +7,7 @@ import os
 import shutil
 from pathlib import Path
 import asyncio
+from datetime import datetime
 
 from app.config import settings
 from app.models import (
@@ -20,6 +21,8 @@ from app.models import (
     Project,
     SessionLocal,
 )
+from app.services.auth_service import get_current_user, get_current_user_optional
+from app.models.database import User
 from app.services import (
     PDFProcessor,
     NERService,
@@ -109,6 +112,7 @@ async def process_pdfs(
     background_tasks: BackgroundTasks,
     files: List[UploadFile] = File(...),
     project_name: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
 ):
     """
     Process uploaded PDF files and generate knowledge graph
@@ -158,7 +162,8 @@ async def process_pdfs(
         process_pdfs_background,
         job_id,
         saved_files,
-        project_name or f"Project_{job_id[:8]}"
+        project_name or f"Project_{job_id[:8]}",
+        current_user.id
     )
     
     return processing_jobs[job_id]
@@ -167,7 +172,8 @@ async def process_pdfs(
 async def process_pdfs_background(
     job_id: str,
     pdf_files: List[dict],  # Now receives list of {path, original_name}
-    project_name: str
+    project_name: str,
+    user_id: str
 ):
     """Background task to process PDFs - creates individual graph for each PDF"""
     from app.models.database import Project, Document, PDFGraphNode, PDFGraphEdge
@@ -175,13 +181,17 @@ async def process_pdfs_background(
     
     db = SessionLocal()
     try:
-        # Create or get project
-        project = db.query(Project).filter(Project.name == project_name).first()
+        # Create or get project (check by name and user_id to avoid conflicts)
+        project = db.query(Project).filter(
+            Project.name == project_name,
+            Project.user_id == user_id
+        ).first()
         if not project:
             project = Project(
                 id=str(uuid.uuid4()),
                 name=project_name,
-                description=f"Project with {len(pdf_files)} PDFs"
+                description=f"Project with {len(pdf_files)} PDFs",
+                user_id=user_id
             )
             db.add(project)
             db.commit()
@@ -394,12 +404,15 @@ async def compute_graph_analytics(graph_data: GraphData):
 
 
 @app.get("/api/projects", response_model=List[ProjectMetadata])
-async def list_projects(db: Session = Depends(get_db)):
+async def list_projects(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     """List all saved projects with PDF metadata"""
     from app.models.database import Document, PDFGraphNode, PDFGraphEdge
     from collections import Counter
     
-    projects = db.query(Project).all()
+    projects = db.query(Project).filter(Project.user_id == current_user.id).all()
     
     result = []
     for p in projects:
@@ -435,12 +448,19 @@ async def list_projects(db: Session = Depends(get_db)):
 
 
 @app.get("/api/projects/{project_id}/pdfs", response_model=List[PDFMetadata])
-async def get_project_pdfs(project_id: str, db: Session = Depends(get_db)):
+async def get_project_pdfs(
+    project_id: str, 
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     """Get all PDFs for a specific project"""
     from app.models.database import Document
     from collections import Counter
     
-    project = db.query(Project).filter(Project.id == project_id).first()
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == current_user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     
@@ -468,12 +488,16 @@ async def get_project_pdfs(project_id: str, db: Session = Depends(get_db)):
 async def update_pdf_selection(
     project_id: str,
     selected_document_ids: List[str],
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """Update which PDFs are selected for graph visualization"""
     from app.models.database import Document
     
-    project = db.query(Project).filter(Project.id == project_id).first()
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == current_user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     
@@ -491,12 +515,16 @@ async def add_pdfs_to_project(
     project_id: str,
     background_tasks: BackgroundTasks,
     files: List[UploadFile] = File(...),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """Add more PDFs to an existing project"""
     from app.models.database import Document, PDFGraphNode, PDFGraphEdge
     
-    project = db.query(Project).filter(Project.id == project_id).first()
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == current_user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     
@@ -539,7 +567,7 @@ async def add_pdfs_to_project(
         job_id,
         project_id,
         saved_files,
-        db
+        current_user.id
     )
     
     return processing_jobs[job_id]
@@ -549,14 +577,17 @@ async def add_pdfs_to_project_background(
     job_id: str,
     project_id: str,
     pdf_files: List[dict],  # Now receives list of {path, original_name}
-    db_session
+    user_id: str
 ):
     """Background task to add PDFs to existing project"""
     from app.models.database import Project, Document, PDFGraphNode, PDFGraphEdge
     
     db = SessionLocal()
     try:
-        project = db.query(Project).filter(Project.id == project_id).first()
+        project = db.query(Project).filter(
+            Project.id == project_id,
+            Project.user_id == user_id
+        ).first()
         if not project:
             processing_jobs[job_id].status = "failed"
             processing_jobs[job_id].message = "Project not found"
@@ -664,12 +695,16 @@ async def add_pdfs_to_project_background(
 async def delete_pdf_from_project(
     project_id: str,
     document_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """Delete a PDF and its graph data from a project"""
     from app.models.database import Document
     
-    project = db.query(Project).filter(Project.id == project_id).first()
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == current_user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     
@@ -693,12 +728,16 @@ async def delete_pdf_from_project(
 async def get_project_graph(
     project_id: str,
     selected_only: bool = True,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """Get the merged graph from selected PDFs (or all PDFs if selected_only=False)"""
     from app.models.database import Document, PDFGraphNode, PDFGraphEdge
     
-    project = db.query(Project).filter(Project.id == project_id).first()
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == current_user.id
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     
@@ -766,7 +805,10 @@ async def get_project_graph(
 # ==== Conversational Agent Endpoints ====
 
 @app.post("/api/chat", response_model=ChatResponse)
-async def chat_with_graph(payload: dict):
+async def chat_with_graph(
+    payload: dict,
+    current_user: User = Depends(get_current_user)
+):
     try:
         # Accept flexible JSON payload to avoid validation errors from clients
         message = (payload or {}).get("message", "")
@@ -827,7 +869,10 @@ async def chat_with_graph(payload: dict):
 
 
 @app.post("/api/hypotheses", response_model=HypothesesResponse)
-async def generate_hypotheses(payload: dict):
+async def generate_hypotheses(
+    payload: dict,
+    current_user: User = Depends(get_current_user)
+):
     try:
         graph = (payload or {}).get("graph", {})
         nodes = graph.get("nodes", [])
@@ -938,13 +983,113 @@ async def ner_preview(req: NerPreviewRequest):
 
 # ==== Project Export/Import Endpoints ====
 
+@app.delete("/api/projects/{project_id}")
+async def delete_project(
+    project_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Delete a project and all its associated data"""
+    from app.models.database import Document, PDFGraphNode, PDFGraphEdge
+    import os
+    
+    # Find project and verify ownership
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == current_user.id
+    ).first()
+    
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    try:
+        # Delete associated files
+        for document in project.documents:
+            if document.file_path and os.path.exists(document.file_path):
+                os.remove(document.file_path)
+        
+        # Delete all associated data (cascade should handle this, but being explicit)
+        db.query(PDFGraphNode).filter(
+            PDFGraphNode.document_id.in_([doc.id for doc in project.documents])
+        ).delete(synchronize_session=False)
+        
+        db.query(PDFGraphEdge).filter(
+            PDFGraphEdge.document_id.in_([doc.id for doc in project.documents])
+        ).delete(synchronize_session=False)
+        
+        # Delete documents
+        db.query(Document).filter(Document.project_id == project_id).delete()
+        
+        # Delete project
+        db.delete(project)
+        db.commit()
+        
+        return {"status": "success", "message": f"Project '{project.name}' deleted successfully"}
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to delete project: {str(e)}")
+
+
+@app.put("/api/projects/{project_id}")
+async def rename_project(
+    project_id: str,
+    new_name: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Rename a project"""
+    # Find project and verify ownership
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.user_id == current_user.id
+    ).first()
+    
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    if not new_name.strip():
+        raise HTTPException(status_code=400, detail="Project name cannot be empty")
+    
+    try:
+        # Check if another project with the same name exists for this user
+        existing_project = db.query(Project).filter(
+            Project.name == new_name.strip(),
+            Project.user_id == current_user.id,
+            Project.id != project_id
+        ).first()
+        
+        if existing_project:
+            raise HTTPException(status_code=400, detail="A project with this name already exists")
+        
+        # Update project name
+        project.name = new_name.strip()
+        project.updated_at = datetime.utcnow()
+        db.commit()
+        
+        return {"status": "success", "message": f"Project renamed to '{new_name.strip()}' successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to rename project: {str(e)}")
+
+
 @app.get("/api/projects/{project_id}/export")
-async def export_project(project_id: str, db: Session = Depends(get_db)):
+async def export_project(
+    project_id: str, 
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     """Export a project with all individual PDF graphs as JSON"""
     from app.models.schemas import PDFGraphExport, Node, Edge, EntityType
     
     try:
-        project = db.query(Project).filter(Project.id == project_id).first()
+        project = db.query(Project).filter(
+            Project.id == project_id,
+            Project.user_id == current_user.id
+        ).first()
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
         
@@ -1001,7 +1146,11 @@ async def export_project(project_id: str, db: Session = Depends(get_db)):
 
 
 @app.post("/api/projects/import")
-async def import_project(req: dict, db: Session = Depends(get_db)):
+async def import_project(
+    req: dict, 
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     """Import a project from JSON with per-PDF graphs"""
     from app.models.database import Project, Document, PDFGraphNode, PDFGraphEdge
     
@@ -1015,7 +1164,8 @@ async def import_project(req: dict, db: Session = Depends(get_db)):
         project = Project(
             id=project_id,
             name=project_data.get("project_name", f"Imported Project {project_id[:8]}"),
-            description="Imported project"
+            description="Imported project",
+            user_id=current_user.id
         )
         db.add(project)
         db.commit()
@@ -1098,7 +1248,8 @@ async def discover_papers(req: PaperDiscoveryRequest):
 async def process_discovered_papers(
     background_tasks: BackgroundTasks,
     papers: List[DiscoveredPaper],
-    merge_with_existing: bool = False
+    merge_with_existing: bool = False,
+    current_user: User = Depends(get_current_user)
 ):
     """Process discovered papers through NER pipeline"""
     try:
@@ -1118,7 +1269,8 @@ async def process_discovered_papers(
             process_text_background,
             job_id,
             all_text,
-            f"Discovered_Papers_{job_id[:8]}"
+            f"Discovered_Papers_{job_id[:8]}",
+            current_user.id
         )
         
         return processing_jobs[job_id]
@@ -1126,7 +1278,7 @@ async def process_discovered_papers(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def process_text_background(job_id: str, text: str, project_name: str):
+async def process_text_background(job_id: str, text: str, project_name: str, user_id: str):
     """Background task to process text through NER pipeline"""
     try:
         processing_jobs[job_id].status = "processing"

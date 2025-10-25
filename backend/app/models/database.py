@@ -9,16 +9,32 @@ engine = create_engine(settings.database_url, connect_args={"check_same_thread":
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
+class User(Base):
+    __tablename__ = "users"
+    
+    id = Column(String, primary_key=True)  # Google OAuth user ID
+    name = Column(String, nullable=False)
+    email = Column(String, nullable=False)
+    picture = Column(String, default="")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_login = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    projects = relationship("Project", back_populates="user", cascade="all, delete-orphan")
+
+
 class Project(Base):
     __tablename__ = "projects"
     
     id = Column(String, primary_key=True)
     name = Column(String, nullable=False)
     description = Column(Text, default="")
+    user_id = Column(String, ForeignKey("users.id"), nullable=False)  # Google OAuth user ID
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
-    # Relationships - only documents now, graphs are per-PDF
+    # Relationships
+    user = relationship("User", back_populates="projects")
     documents = relationship("Document", back_populates="project", cascade="all, delete-orphan")
 
 

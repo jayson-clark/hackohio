@@ -9,7 +9,7 @@ export function UploadPanel() {
   const [files, setFiles] = useState<File[]>([]);
   const [projectName, setProjectName] = useState('');
   
-  const { setProcessingStatus, setIsProcessing, setGraphData, setCurrentProject, setPdfs } = useStore();
+  const { setProcessingStatus, setIsProcessing, setGraphData, setCurrentProject, setPdfs, setShowUploadPanel } = useStore();
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     setFiles((prev) => [...prev, ...acceptedFiles]);
@@ -78,6 +78,9 @@ export function UploadPanel() {
               // Clear files after successful upload
               setFiles([]);
               setProjectName('');
+              
+              // Hide upload panel and show project
+              setShowUploadPanel(false);
             } else {
               console.error('No result in completed status:', updatedStatus);
               toast.error('No graph data received');

@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Box,
   BoxSelect,
+  Plus,
 } from 'lucide-react';
 import { useStore } from '@/store/useStore';
 import { ENTITY_COLORS, ENTITY_LABELS, EntityType } from '@/types';
@@ -27,6 +28,7 @@ export function Sidebar() {
     graphData,
     toggleAnalytics,
     currentProject,
+    setShowUploadPanel,
   } = useStore();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -94,6 +96,17 @@ export function Sidebar() {
                 ? `${filteredGraphData.nodes.length} nodes, ${filteredGraphData.edges.length} edges`
                 : 'No data loaded'}
             </p>
+          </div>
+
+          {/* New Project Button */}
+          <div className="mb-6">
+            <button
+              onClick={() => setShowUploadPanel(true)}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200 flex items-center justify-center space-x-2"
+            >
+              <Plus className="w-4 h-4" />
+              <span>New Project</span>
+            </button>
           </div>
 
           {/* PDF Selector */}

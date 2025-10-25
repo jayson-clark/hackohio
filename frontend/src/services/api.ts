@@ -28,8 +28,8 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
-      // Token expired or invalid, clear auth data
+    if (error.response?.status === 401 || error.response?.status === 403) {
+      // Token expired, invalid, or not authenticated, clear auth data
       localStorage.removeItem('auth_token');
       localStorage.removeItem('user_data');
       // Optionally redirect to login or trigger re-authentication
@@ -300,6 +300,24 @@ export const apiService = {
       }>;
       graph?: GraphData;
     };
+  },
+
+  /**
+   * Delete a project
+   */
+  async deleteProject(projectId: string) {
+    const response = await api.delete(`/api/projects/${projectId}`);
+    return response.data;
+  },
+
+  /**
+   * Rename a project
+   */
+  async renameProject(projectId: string, newName: string) {
+    const response = await api.put(`/api/projects/${projectId}`, null, {
+      params: { new_name: newName }
+    });
+    return response.data;
   },
 
   /**

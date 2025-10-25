@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
 import { googleLogout } from '@react-oauth/google';
 import { useAuth } from '../contexts/AuthContext';
-import { User, LogOut, Settings } from 'lucide-react';
+import { useStore } from '../store/useStore';
+import { User, LogOut, Settings, FolderOpen } from 'lucide-react';
 
 export const UserProfile: React.FC = () => {
   const { user, logout } = useAuth();
+  const { setShowProjectSelection } = useStore();
   const [isOpen, setIsOpen] = useState(false);
 
   const handleLogout = () => {
@@ -67,6 +69,17 @@ export const UserProfile: React.FC = () => {
             </div>
             
             <div className="py-2">
+              <button
+                onClick={() => {
+                  setIsOpen(false);
+                  setShowProjectSelection(true);
+                }}
+                className="w-full px-4 py-2 text-left text-gray-300 hover:bg-gray-700 hover:text-white transition-colors duration-200 flex items-center space-x-3"
+              >
+                <FolderOpen className="w-4 h-4" />
+                <span>Switch Project</span>
+              </button>
+              
               <button
                 onClick={() => {
                   setIsOpen(false);

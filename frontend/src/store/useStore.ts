@@ -29,6 +29,9 @@ interface AppState {
   // UI state
   sidebarOpen: boolean;
   analyticsOpen: boolean;
+  showProjectSelection: boolean;
+  showUploadPanel: boolean;
+  isLoadingProject: boolean;
   
   // Actions
   setCurrentProject: (project: ProjectInfo | null) => void;
@@ -46,6 +49,9 @@ interface AppState {
   setIsProcessing: (processing: boolean) => void;
   toggleSidebar: () => void;
   toggleAnalytics: () => void;
+  setShowProjectSelection: (show: boolean) => void;
+  setShowUploadPanel: (show: boolean) => void;
+  setIsLoadingProject: (loading: boolean) => void;
   reset: () => void;
 }
 
@@ -78,6 +84,9 @@ export const useStore = create<AppState>((set) => ({
   isProcessing: false,
   sidebarOpen: true,
   analyticsOpen: false,
+  showProjectSelection: false,
+  showUploadPanel: false,
+  isLoadingProject: false,
 
   // Actions
   setCurrentProject: (project) => set({ currentProject: project }),
@@ -165,6 +174,12 @@ export const useStore = create<AppState>((set) => ({
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
   
   toggleAnalytics: () => set((state) => ({ analyticsOpen: !state.analyticsOpen })),
+  
+  setShowProjectSelection: (show) => set({ showProjectSelection: show }),
+  
+  setShowUploadPanel: (show) => set({ showUploadPanel: show }),
+  
+  setIsLoadingProject: (loading) => set({ isLoadingProject: loading }),
   
   reset: () =>
     set({
