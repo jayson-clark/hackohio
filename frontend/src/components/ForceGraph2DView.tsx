@@ -53,7 +53,9 @@ export function ForceGraph2DView() {
 
   console.log('ForceGraph2D rendering:', {
     nodes: filteredGraphData.nodes.length,
-    edges: filteredGraphData.edges.length
+    edges: filteredGraphData.edges.length,
+    sampleNode: filteredGraphData.nodes[0],
+    sampleEdge: filteredGraphData.edges[0]
   });
 
   return (
@@ -122,7 +124,9 @@ export function ForceGraph2DView() {
         }
         linkColor={(link: any) => {
           const l = link as GraphEdge;
-          const linkId = `${l.source}-${l.target}`;
+          const sourceId = typeof l.source === 'string' ? l.source : (l.source as any)?.id;
+          const targetId = typeof l.target === 'string' ? l.target : (l.target as any)?.id;
+          const linkId = `${sourceId}-${targetId}`;
           if (highlightedLinks.size > 0) {
             return highlightedLinks.has(linkId)
               ? 'rgba(255, 255, 255, 0.6)'
@@ -132,7 +136,9 @@ export function ForceGraph2DView() {
         }}
         linkWidth={(link: any) => {
           const l = link as GraphEdge;
-          const linkId = `${l.source}-${l.target}`;
+          const sourceId = typeof l.source === 'string' ? l.source : (l.source as any)?.id;
+          const targetId = typeof l.target === 'string' ? l.target : (l.target as any)?.id;
+          const linkId = `${sourceId}-${targetId}`;
           if (highlightedLinks.has(linkId)) {
             return 2;
           }

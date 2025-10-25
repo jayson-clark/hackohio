@@ -5,6 +5,8 @@ from .graph_builder import GraphBuilder
 from .llm_service import LLMService
 from .graph_agent import GraphConversationalAgent
 from .hypothesis_agent import HypothesisAgent
+from .pubmed_service import PubMedService
+from .ctgov_service import ClinicalTrialsService
 
 __all__ = [
     "PDFProcessor",
@@ -14,5 +16,7 @@ __all__ = [
     "LLMService",
     "GraphConversationalAgent",
     "HypothesisAgent",
+    "PubMedService",
+    "ClinicalTrialsService",
 ]
 

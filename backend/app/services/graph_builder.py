@@ -231,4 +231,57 @@ class GraphBuilder:
         self.graph = temp_graph
         
         return result
+    
+    def merge_graphs(self, base_entities: Dict[str, Dict], base_relationships: List[Dict],
+                     new_entities: Dict[str, Dict], new_relationships: List[Dict]) -> GraphData:
+        """
+        Merge two graphs: combine nodes (keeping max counts), aggregate edge weights, merge evidence
+        """
+        # Merge entities: union, keep highest count
+        merged_entities = dict(base_entities)
+        for key, entity in new_entities.items():
+            if key in merged_entities:
+                # Keep existing but update count to max
+                merged_entities[key]["count"] = max(
+                    merged_entities[key].get("count", 1),
+                    entity.get("count", 1)
+                )
+            else:
+                merged_entities[key] = entity
+        
+        # Merge relationships: aggregate weights, combine evidence
+        rel_map = {}
+        for rel in base_relationships:
+            key = tuple(sorted([rel["source"], rel["target"]]))
+            rel_map[key] = {
+                "source": rel["source"],
+                "target": rel["target"],
+                "weight": rel.get("weight", 1.0),
+                "evidence": rel.get("evidence", []),
+                "relationship_type": rel.get("relationship_type", "CO_OCCURRENCE")
+            }
+        
+        for rel in new_relationships:
+            key = tuple(sorted([rel["source"], rel["target"]]))
+            if key in rel_map:
+                # Aggregate weight and merge evidence
+                rel_map[key]["weight"] += rel.get("weight", 1.0)
+                existing_evidence = rel_map[key]["evidence"]
+                new_evidence = rel.get("evidence", [])
+                # Combine and deduplicate evidence (keep top 5)
+                combined = list(dict.fromkeys(existing_evidence + new_evidence))
+                rel_map[key]["evidence"] = combined[:5]
+            else:
+                rel_map[key] = {
+                    "source": rel["source"],
+                    "target": rel["target"],
+                    "weight": rel.get("weight", 1.0),
+                    "evidence": rel.get("evidence", []),
+                    "relationship_type": rel.get("relationship_type", "CO_OCCURRENCE")
+                }
+        
+        merged_relationships = list(rel_map.values())
+        
+        # Build graph from merged data
+        return self.build_graph(merged_entities, merged_relationships)
 

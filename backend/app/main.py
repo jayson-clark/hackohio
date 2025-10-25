@@ -26,6 +26,8 @@ from app.services import (
     LLMService,
     GraphConversationalAgent,
     HypothesisAgent,
+    PubMedService,
+    ClinicalTrialsService,
 )
 from sqlalchemy.orm import Session
 from app.models import (
@@ -35,6 +37,14 @@ from app.models import (
     HypothesesResponse,
     NerPreviewRequest,
     NerPreviewResponse,
+    ProjectExport,
+    ProjectImportRequest,
+    PaperDiscoveryRequest,
+    PaperDiscoveryResponse,
+    DiscoveredPaper,
+    TrialDiscoveryRequest,
+    TrialDiscoveryResponse,
+    ClinicalTrial,
 )
 
 # Initialize FastAPI app
@@ -60,6 +70,8 @@ ner_service = NERService(model_name=_settings.scispacy_model)
 relationship_extractor = RelationshipExtractor()
 graph_builder = GraphBuilder()
 llm_service = LLMService()
+pubmed_service = PubMedService()
+ctgov_service = ClinicalTrialsService()
 
 # Storage for processing jobs
 processing_jobs = {}
@@ -93,7 +105,6 @@ async def process_pdfs(
     background_tasks: BackgroundTasks,
     files: List[UploadFile] = File(...),
     project_name: Optional[str] = None,
-    enable_llm: bool = False,
 ):
     """
     Process uploaded PDF files and generate knowledge graph
@@ -140,8 +151,7 @@ async def process_pdfs(
         process_pdfs_background,
         job_id,
         saved_paths,
-        project_name or f"Project_{job_id[:8]}",
-        enable_llm
+        project_name or f"Project_{job_id[:8]}"
     )
     
     return processing_jobs[job_id]
@@ -150,8 +160,7 @@ async def process_pdfs(
 async def process_pdfs_background(
     job_id: str,
     pdf_paths: List[str],
-    project_name: str,
-    enable_llm: bool = False
+    project_name: str
 ):
     """Background task to process PDFs"""
     try:
@@ -564,6 +573,263 @@ async def ner_preview(req: NerPreviewRequest):
                 "min_entity_occurrences": original,
                 "used_min_occurrences": max(1, req.min_occurrences),
             }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==== Project Export/Import Endpoints ====
+
+@app.get("/api/projects/{project_id}/export", response_model=ProjectExport)
+async def export_project(project_id: str, db: Session = Depends(get_db)):
+    """Export a project as JSON"""
+    try:
+        project = db.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Reconstruct graph from database
+        nodes = []
+        for gn in project.graph_nodes:
+            nodes.append({
+                "id": gn.entity_id,
+                "group": gn.entity_type,
+                "value": gn.degree,
+                "metadata": {"count": gn.count, "degree": gn.degree}
+            })
+        
+        edges = []
+        for ge in project.graph_edges:
+            edges.append({
+                "source": ge.source_id,
+                "target": ge.target_id,
+                "value": ge.weight,
+                "title": ge.evidence[0] if ge.evidence else "",
+                "metadata": {
+                    "all_evidence": ge.evidence,
+                    "relationship_type": ge.relationship_type
+                }
+            })
+        
+        graph = GraphData(nodes=nodes, edges=edges, metadata={})
+        
+        return ProjectExport(
+            project_name=project.name,
+            created_at=project.created_at.isoformat(),
+            updated_at=project.updated_at.isoformat(),
+            graph=graph,
+            sources=[{"type": "pdf", "filename": doc.filename} for doc in project.documents],
+            settings={}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/projects/import")
+async def import_project(req: dict):
+    """Import a project from JSON"""
+    try:
+        print(f"DEBUG Import: Received keys: {req.keys()}")
+        
+        # Accept flexible JSON structure
+        project_data = req.get("project_data", req)
+        
+        # Extract graph data
+        if isinstance(project_data, dict) and "graph" in project_data:
+            graph_data = project_data["graph"]
+            print(f"DEBUG Import: Found graph with {len(graph_data.get('nodes', []))} nodes")
+        else:
+            # Assume the payload itself is the graph
+            graph_data = project_data
+            print(f"DEBUG Import: Using raw data as graph")
+        
+        # Ensure graph has required structure
+        if not isinstance(graph_data, dict):
+            raise ValueError("Graph data must be a dictionary")
+        
+        if "nodes" not in graph_data or "edges" not in graph_data:
+            raise ValueError("Graph must have 'nodes' and 'edges' arrays")
+        
+        print(f"DEBUG Import: Returning {len(graph_data['nodes'])} nodes, {len(graph_data['edges'])} edges")
+        return {"status": "success", "graph": graph_data}
+    except Exception as e:
+        print(f"ERROR Import: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==== Paper Discovery Endpoints ====
+
+@app.post("/api/discover/papers", response_model=PaperDiscoveryResponse)
+async def discover_papers(req: PaperDiscoveryRequest):
+    """Discover papers from PubMed and optionally process them"""
+    try:
+        papers = pubmed_service.discover_and_fetch(req.query, req.max_results)
+        
+        discovered = [
+            DiscoveredPaper(**paper) for paper in papers if paper
+        ]
+        
+        return PaperDiscoveryResponse(
+            papers=discovered,
+            status="completed"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/discover/papers/process")
+async def process_discovered_papers(
+    background_tasks: BackgroundTasks,
+    papers: List[DiscoveredPaper],
+    merge_with_existing: bool = False
+):
+    """Process discovered papers through NER pipeline"""
+    try:
+        job_id = str(uuid.uuid4())
+        
+        # Combine all abstracts into sentences
+        all_text = "\n\n".join([f"{p.title}. {p.abstract}" for p in papers])
+        
+        processing_jobs[job_id] = ProcessingStatus(
+            job_id=job_id,
+            status="pending",
+            progress=0.0,
+            message="Processing discovered papers"
+        )
+        
+        background_tasks.add_task(
+            process_text_background,
+            job_id,
+            all_text,
+            f"Discovered_Papers_{job_id[:8]}"
+        )
+        
+        return processing_jobs[job_id]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def process_text_background(job_id: str, text: str, project_name: str):
+    """Background task to process text through NER pipeline"""
+    try:
+        processing_jobs[job_id].status = "processing"
+        processing_jobs[job_id].progress = 0.2
+        processing_jobs[job_id].message = "Extracting entities..."
+        
+        # Split into sentences
+        doc = ner_service.nlp(text)
+        sentences = [sent.text.strip() for sent in doc.sents if sent.text.strip()]
+        
+        processing_jobs[job_id].progress = 0.4
+        sentence_entities = ner_service.extract_entities_from_sentences(sentences)
+        
+        processing_jobs[job_id].progress = 0.6
+        filtered_entities = ner_service.filter_entities(sentence_entities)
+        unique_entities = ner_service.get_unique_entities(filtered_entities)
+        
+        processing_jobs[job_id].progress = 0.8
+        processing_jobs[job_id].message = "Extracting relationships..."
+        relationships = relationship_extractor.extract_all_relationships(filtered_entities)
+        
+        processing_jobs[job_id].progress = 0.9
+        processing_jobs[job_id].message = "Building graph..."
+        graph_data = graph_builder.build_graph(unique_entities, relationships)
+        
+        processing_jobs[job_id].status = "completed"
+        processing_jobs[job_id].progress = 1.0
+        processing_jobs[job_id].message = "Complete!"
+        processing_jobs[job_id].result = graph_data
+    except Exception as e:
+        processing_jobs[job_id].status = "failed"
+        processing_jobs[job_id].message = f"Error: {str(e)}"
+
+
+# ==== Clinical Trials Discovery Endpoints ====
+
+@app.post("/api/discover/trials", response_model=TrialDiscoveryResponse)
+async def discover_trials(req: TrialDiscoveryRequest):
+    """Discover clinical trials and convert to graph nodes"""
+    try:
+        trials = ctgov_service.search_trials(
+            req.condition,
+            req.max_results,
+            req.phases,
+            req.status
+        )
+        
+        trial_objects = [ClinicalTrial(**t) for t in trials if t.get("nct_id")]
+        
+        # Convert trials to graph nodes and edges
+        nodes = []
+        edges = []
+        
+        for trial in trial_objects:
+            # Add trial node
+            trial_node_id = f"TRIAL:{trial.nct_id}"
+            nodes.append({
+                "id": trial_node_id,
+                "group": "ENTITY",
+                "value": len(trial.interventions) + 1,
+                "metadata": {
+                    "type": "clinical_trial",
+                    "nct_id": trial.nct_id,
+                    "phase": trial.phase,
+                    "status": trial.status,
+                    "url": trial.url
+                }
+            })
+            
+            # Add condition node
+            if trial.condition:
+                nodes.append({
+                    "id": trial.condition,
+                    "group": "DISEASE",
+                    "value": 1,
+                    "metadata": {"type": "disease"}
+                })
+                edges.append({
+                    "source": trial_node_id,
+                    "target": trial.condition,
+                    "value": 1.0,
+                    "title": f"{trial.nct_id} studies {trial.condition}",
+                    "metadata": {
+                        "relationship_type": "CLINICAL_TRIAL_STUDIES",
+                        "all_evidence": [trial.brief_summary[:200]]
+                    }
+                })
+            
+            # Add intervention nodes
+            for intervention in trial.interventions:
+                nodes.append({
+                    "id": intervention,
+                    "group": "CHEMICAL",
+                    "value": 1,
+                    "metadata": {"type": "intervention"}
+                })
+                edges.append({
+                    "source": trial_node_id,
+                    "target": intervention,
+                    "value": 1.0,
+                    "title": f"{trial.nct_id} tests {intervention}",
+                    "metadata": {
+                        "relationship_type": "CLINICAL_TRIAL_TESTS",
+                        "all_evidence": [trial.brief_summary[:200]]
+                    }
+                })
+        
+        # Deduplicate nodes
+        unique_nodes = {n["id"]: n for n in nodes}
+        graph = GraphData(
+            nodes=list(unique_nodes.values()),
+            edges=edges,
+            metadata={"source": "clinicaltrials.gov"}
+        )
+        
+        return TrialDiscoveryResponse(
+            trials=trial_objects,
+            graph=graph
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

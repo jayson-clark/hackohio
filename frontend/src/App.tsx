@@ -35,26 +35,32 @@ function App() {
         filterOptions.entityTypes.includes(node.group)
       );
       const nodeIds = new Set(filtered.nodes.map((n) => n.id));
-      filtered.edges = filtered.edges.filter(
-        (edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target)
-      );
+      filtered.edges = filtered.edges.filter((edge) => {
+        const sourceId = typeof edge.source === 'string' ? edge.source : (edge.source as any)?.id;
+        const targetId = typeof edge.target === 'string' ? edge.target : (edge.target as any)?.id;
+        return nodeIds.has(sourceId) && nodeIds.has(targetId);
+      });
     }
 
     // Filter by minimum degree
     if (filterOptions.minDegree > 1) {
       const degrees = new Map<string, number>();
       filtered.edges.forEach((edge) => {
-        degrees.set(edge.source, (degrees.get(edge.source) || 0) + 1);
-        degrees.set(edge.target, (degrees.get(edge.target) || 0) + 1);
+        const sourceId = typeof edge.source === 'string' ? edge.source : (edge.source as any)?.id;
+        const targetId = typeof edge.target === 'string' ? edge.target : (edge.target as any)?.id;
+        degrees.set(sourceId, (degrees.get(sourceId) || 0) + 1);
+        degrees.set(targetId, (degrees.get(targetId) || 0) + 1);
       });
 
       filtered.nodes = filtered.nodes.filter(
         (node) => (degrees.get(node.id) || 0) >= filterOptions.minDegree
       );
       const nodeIds = new Set(filtered.nodes.map((n) => n.id));
-      filtered.edges = filtered.edges.filter(
-        (edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target)
-      );
+      filtered.edges = filtered.edges.filter((edge) => {
+        const sourceId = typeof edge.source === 'string' ? edge.source : (edge.source as any)?.id;
+        const targetId = typeof edge.target === 'string' ? edge.target : (edge.target as any)?.id;
+        return nodeIds.has(sourceId) && nodeIds.has(targetId);
+      });
     }
 
     // Filter by search query
@@ -64,14 +70,17 @@ function App() {
         node.id.toLowerCase().includes(query)
       );
       const nodeIds = new Set(filtered.nodes.map((n) => n.id));
-      filtered.edges = filtered.edges.filter(
-        (edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target)
-      );
+      filtered.edges = filtered.edges.filter((edge) => {
+        const sourceId = typeof edge.source === 'string' ? edge.source : (edge.source as any)?.id;
+        const targetId = typeof edge.target === 'string' ? edge.target : (edge.target as any)?.id;
+        return nodeIds.has(sourceId) && nodeIds.has(targetId);
+      });
     }
 
     console.log('App: Filtered result', {
       filteredNodes: filtered.nodes.length,
-      filteredEdges: filtered.edges.length
+      filteredEdges: filtered.edges.length,
+      sampleFilteredEdge: filtered.edges[0]
     });
 
     setFilteredGraphData(filtered);

@@ -68,7 +68,16 @@ export const useStore = create<AppState>((set) => ({
   analyticsOpen: false,
 
   // Actions
-  setGraphData: (data) => set({ graphData: data, filteredGraphData: data }),
+  setGraphData: (data) => {
+    console.log('Store setGraphData called with:', {
+      hasData: !!data,
+      nodes: data?.nodes?.length || 0,
+      edges: data?.edges?.length || 0,
+      sampleNode: data?.nodes?.[0],
+      sampleEdge: data?.edges?.[0]
+    });
+    set({ graphData: data, filteredGraphData: data });
+  },
   
   setFilteredGraphData: (data) => set({ filteredGraphData: data }),
   

@@ -134,3 +134,70 @@ class NerPreviewResponse(BaseModel):
     raw_sentences: Optional[List[NerSentenceEntities]] = None
     debug: Optional[Dict[str, Any]] = None
 
+
+# ==== Project Export/Import Schemas ====
+
+class ProjectExport(BaseModel):
+    project_name: str
+    created_at: str
+    updated_at: str
+    graph: GraphData
+    sources: List[Dict[str, Any]] = []
+    settings: Dict[str, Any] = {}
+
+
+class ProjectImportRequest(BaseModel):
+    project_data: ProjectExport
+    merge_with_existing: bool = False
+
+
+# ==== Paper Discovery Schemas ====
+
+class PaperDiscoveryRequest(BaseModel):
+    query: str
+    max_results: int = 10
+    auto_merge: bool = True
+    source: str = "pubmed"  # pubmed, arxiv, etc
+
+
+class DiscoveredPaper(BaseModel):
+    id: str  # PMID or DOI
+    title: str
+    abstract: str
+    authors: List[str] = []
+    journal: str = ""
+    year: Optional[int] = None
+    url: str = ""
+
+
+class PaperDiscoveryResponse(BaseModel):
+    papers: List[DiscoveredPaper]
+    job_id: Optional[str] = None
+    status: str = "completed"
+
+
+# ==== Clinical Trials Schemas ====
+
+class TrialDiscoveryRequest(BaseModel):
+    condition: str
+    max_results: int = 20
+    phases: Optional[List[str]] = None  # ["PHASE1", "PHASE2", etc]
+    status: Optional[List[str]] = None  # ["RECRUITING", "COMPLETED", etc]
+
+
+class ClinicalTrial(BaseModel):
+    nct_id: str
+    title: str
+    condition: str
+    interventions: List[str] = []
+    phase: str = ""
+    status: str = ""
+    sponsor: str = ""
+    brief_summary: str = ""
+    url: str = ""
+
+
+class TrialDiscoveryResponse(BaseModel):
+    trials: List[ClinicalTrial]
+    graph: Optional[GraphData] = None
+

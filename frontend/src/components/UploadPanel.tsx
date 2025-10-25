@@ -8,7 +8,6 @@ import toast from 'react-hot-toast';
 export function UploadPanel() {
   const [files, setFiles] = useState<File[]>([]);
   const [projectName, setProjectName] = useState('');
-  const [enableLLM, setEnableLLM] = useState(false);
   
   const { setProcessingStatus, setIsProcessing, setGraphData } = useStore();
 
@@ -39,7 +38,7 @@ export function UploadPanel() {
 
     try {
       // Start processing
-      const status = await apiService.uploadPDFs(files, projectName, enableLLM);
+      const status = await apiService.uploadPDFs(files, projectName, false);
       setProcessingStatus(status);
 
       // Poll for status
@@ -175,26 +174,6 @@ export function UploadPanel() {
           </div>
         )}
 
-        {/* LLM Option */}
-        <div className="mt-6">
-          <label className="flex items-center space-x-3 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={enableLLM}
-              onChange={(e) => setEnableLLM(e.target.checked)}
-              className="w-4 h-4 text-primary-600 bg-gray-800 border-gray-600 rounded focus:ring-primary-500"
-            />
-            <div>
-              <span className="text-sm font-medium text-gray-300">
-                Enable AI-Powered Extraction (Optional)
-              </span>
-              <p className="text-xs text-gray-500">
-                Uses LLM for semantic relationship understanding (requires API key)
-              </p>
-            </div>
-          </label>
-        </div>
-
         {/* Upload Button */}
         <button
           onClick={handleUpload}
@@ -213,6 +192,68 @@ export function UploadPanel() {
             </>
           )}
         </button>
+
+        {/* Import Project Option */}
+        <div className="mt-4 text-center">
+          <div className="relative">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-gray-700"></div>
+            </div>
+            <div className="relative flex justify-center text-sm">
+              <span className="px-2 bg-gray-900 text-gray-400">or</span>
+            </div>
+          </div>
+          <button
+            onClick={() => {
+              const input = document.createElement('input');
+              input.type = 'file';
+              input.accept = '.json';
+              input.onchange = async (e: any) => {
+                const file = e.target?.files?.[0];
+                if (!file) return;
+                try {
+                  const text = await file.text();
+                  const data = JSON.parse(text);
+                  console.log('UploadPanel import - raw data:', data);
+                  
+                  const res = await apiService.importProject(data);
+                  console.log('UploadPanel import - API response:', res);
+                  
+                  if (res.graph) {
+                    // Normalize graph data to ensure edges have string IDs
+                    const normalizedGraph = {
+                      ...res.graph,
+                      edges: res.graph.edges.map((edge: any) => ({
+                        ...edge,
+                        source: typeof edge.source === 'string' ? edge.source : edge.source?.id || edge.source,
+                        target: typeof edge.target === 'string' ? edge.target : edge.target?.id || edge.target,
+                      }))
+                    };
+                    
+                    console.log('UploadPanel import - normalized:', {
+                      nodes: normalizedGraph.nodes.length,
+                      edges: normalizedGraph.edges.length,
+                      sampleEdge: normalizedGraph.edges[0]
+                    });
+                    
+                    setGraphData(normalizedGraph);
+                    toast.success(`Project imported! ${normalizedGraph.nodes?.length || 0} nodes, ${normalizedGraph.edges?.length || 0} edges`);
+                  } else {
+                    toast.error('No graph data in response');
+                    console.error('Import response missing graph:', res);
+                  }
+                } catch (error: any) {
+                  console.error('Import error:', error);
+                  toast.error(`Failed to import: ${error.message || 'Unknown error'}`);
+                }
+              };
+              input.click();
+            }}
+            className="mt-4 px-6 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg border border-gray-700 transition-all"
+          >
+            Import Existing Project
+          </button>
+        </div>
       </div>
     </div>
   );

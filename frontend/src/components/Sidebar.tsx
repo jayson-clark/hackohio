@@ -260,6 +260,162 @@ export function Sidebar() {
               ))}
             </div>
           </div>
+
+          {/* Export/Import */}
+          <div className="mt-6">
+            <label className="block text-sm font-medium text-gray-300 mb-2">Project</label>
+            <div className="flex gap-2">
+              <button
+                onClick={async () => {
+                  if (!filteredGraphData) return;
+                  
+                  // Normalize edges to ensure source/target are strings, not objects
+                  const normalizedGraph = {
+                    ...filteredGraphData,
+                    edges: filteredGraphData.edges.map(edge => ({
+                      ...edge,
+                      source: typeof edge.source === 'string' ? edge.source : (edge.source as any)?.id || edge.source,
+                      target: typeof edge.target === 'string' ? edge.target : (edge.target as any)?.id || edge.target,
+                    }))
+                  };
+                  
+                  console.log('Exporting normalized graph:', {
+                    nodes: normalizedGraph.nodes.length,
+                    edges: normalizedGraph.edges.length,
+                    sampleEdge: normalizedGraph.edges[0]
+                  });
+                  
+                  const projectData = await apiService.exportProject(normalizedGraph, 'Synapse_Project');
+                  const blob = new Blob([JSON.stringify(projectData, null, 2)], { type: 'application/json' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `synapse_project_${Date.now()}.json`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }}
+                disabled={!filteredGraphData}
+                className="flex-1 text-xs px-2 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded text-white"
+              >
+                Export
+              </button>
+              <button
+                onClick={() => {
+                  const input = document.createElement('input');
+                  input.type = 'file';
+                  input.accept = '.json';
+                  input.onchange = async (e: any) => {
+                    const file = e.target?.files?.[0];
+                    if (!file) return;
+                    try {
+                      const text = await file.text();
+                      const data = JSON.parse(text);
+                      console.log('Sidebar import - raw data:', data);
+                      
+                      const res = await apiService.importProject(data);
+                      console.log('Sidebar import - API response:', res);
+                      
+                      if (res.graph) {
+                        // Normalize graph data to ensure edges have string IDs
+                        const normalizedGraph = {
+                          ...res.graph,
+                          edges: res.graph.edges.map((edge: any) => ({
+                            ...edge,
+                            source: typeof edge.source === 'string' ? edge.source : edge.source?.id || edge.source,
+                            target: typeof edge.target === 'string' ? edge.target : edge.target?.id || edge.target,
+                          }))
+                        };
+                        
+                        console.log('Sidebar import - normalized:', {
+                          nodes: normalizedGraph.nodes.length,
+                          edges: normalizedGraph.edges.length,
+                          sampleEdge: normalizedGraph.edges[0]
+                        });
+                        
+                        useStore.getState().setGraphData(normalizedGraph);
+                        alert(`Imported ${normalizedGraph.nodes?.length || 0} nodes, ${normalizedGraph.edges?.length || 0} edges`);
+                      } else {
+                        alert('Import failed: No graph data');
+                      }
+                    } catch (error: any) {
+                      console.error('Sidebar import error:', error);
+                      alert(`Import error: ${error.message}`);
+                    }
+                  };
+                  input.click();
+                }}
+                className="flex-1 text-xs px-2 py-2 bg-green-600 hover:bg-green-500 rounded text-white"
+              >
+                Import
+              </button>
+            </div>
+          </div>
+
+          {/* Paper Discovery */}
+          <div className="mt-6">
+            <label className="block text-sm font-medium text-gray-300 mb-2">Discover Papers</label>
+            <div className="flex gap-2 mb-2">
+              <input
+                type="text"
+                placeholder="e.g. NSCLC microRNA"
+                className="flex-1 text-xs px-2 py-1 bg-gray-800 border border-gray-700 rounded text-white"
+                id="paper-query"
+              />
+              <button
+                onClick={async () => {
+                  const input = document.getElementById('paper-query') as HTMLInputElement;
+                  if (!input?.value) return;
+                  try {
+                    const res = await apiService.discoverPapers(input.value, 10);
+                    alert(`Found ${res.papers.length} papers! Check console for details.`);
+                    console.log('Discovered papers:', res.papers);
+                  } catch (e) {
+                    alert('Error discovering papers');
+                  }
+                }}
+                className="text-xs px-2 py-1 bg-purple-600 hover:bg-purple-500 rounded text-white"
+              >
+                Search
+              </button>
+            </div>
+          </div>
+
+          {/* Clinical Trials */}
+          <div className="mt-6">
+            <label className="block text-sm font-medium text-gray-300 mb-2">Discover Trials</label>
+            <div className="flex gap-2 mb-2">
+              <input
+                type="text"
+                placeholder="e.g. lung cancer"
+                className="flex-1 text-xs px-2 py-1 bg-gray-800 border border-gray-700 rounded text-white"
+                id="trial-query"
+              />
+              <button
+                onClick={async () => {
+                  const input = document.getElementById('trial-query') as HTMLInputElement;
+                  if (!input?.value) return;
+                  try {
+                    const res = await apiService.discoverTrials(input.value, 20);
+                    if (res.graph && filteredGraphData) {
+                      // Merge trial graph with existing
+                      const merged = {
+                        nodes: [...filteredGraphData.nodes, ...res.graph.nodes],
+                        edges: [...filteredGraphData.edges, ...res.graph.edges],
+                        metadata: { ...filteredGraphData.metadata, trials_added: res.trials.length }
+                      };
+                      useStore.getState().setGraphData(merged);
+                      alert(`Added ${res.trials.length} trials to graph!`);
+                    }
+                  } catch (e) {
+                    alert('Error discovering trials');
+                  }
+                }}
+                className="text-xs px-2 py-1 bg-orange-600 hover:bg-orange-500 rounded text-white"
+              >
+                Add
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </>

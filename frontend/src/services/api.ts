@@ -133,6 +133,87 @@ export const apiService = {
   },
 
   /**
+   * Export current graph as project
+   */
+  async exportProject(graph: GraphData, projectName: string) {
+    return {
+      project_name: projectName,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      graph,
+      sources: [],
+      settings: {},
+    };
+  },
+
+  /**
+   * Import project
+   */
+  async importProject(projectData: any) {
+    const response = await api.post('/api/projects/import', {
+      project_data: projectData,
+      merge_with_existing: false,
+    });
+    return response.data;
+  },
+
+  /**
+   * Discover papers from PubMed
+   */
+  async discoverPapers(query: string, maxResults = 10) {
+    const response = await api.post('/api/discover/papers', {
+      query,
+      max_results: maxResults,
+      auto_merge: false,
+      source: 'pubmed',
+    });
+    return response.data as {
+      papers: Array<{
+        id: string;
+        title: string;
+        abstract: string;
+        authors: string[];
+        journal: string;
+        year?: number;
+        url: string;
+      }>;
+      status: string;
+    };
+  },
+
+  /**
+   * Process discovered papers
+   */
+  async processDiscoveredPapers(papers: any[]) {
+    const response = await api.post('/api/discover/papers/process', papers);
+    return response.data;
+  },
+
+  /**
+   * Discover clinical trials
+   */
+  async discoverTrials(condition: string, maxResults = 20) {
+    const response = await api.post('/api/discover/trials', {
+      condition,
+      max_results: maxResults,
+    });
+    return response.data as {
+      trials: Array<{
+        nct_id: string;
+        title: string;
+        condition: string;
+        interventions: string[];
+        phase: string;
+        status: string;
+        sponsor: string;
+        brief_summary: string;
+        url: string;
+      }>;
+      graph?: GraphData;
+    };
+  },
+
+  /**
    * Health check
    */
   async healthCheck(): Promise<{ status: string; version: string }> {

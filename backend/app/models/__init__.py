@@ -14,6 +14,14 @@ from .schemas import (
     HypothesesResponse,
     NerPreviewRequest,
     NerPreviewResponse,
+    ProjectExport,
+    ProjectImportRequest,
+    PaperDiscoveryRequest,
+    DiscoveredPaper,
+    PaperDiscoveryResponse,
+    TrialDiscoveryRequest,
+    ClinicalTrial,
+    TrialDiscoveryResponse,
 )
 from .database import (
     Base,
