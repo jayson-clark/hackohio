@@ -113,9 +113,6 @@ function AppContent() {
     );
   }
 
-  // Force show LoginComponent for debugging
-  return <LoginComponent />;
-
   if (!isAuthenticated) {
     return <LoginComponent />;
   }

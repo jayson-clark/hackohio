@@ -1,10 +1,10 @@
 import React from 'react';
-import { useGoogleLogin, googleLogout } from '@react-oauth/google';
+import { useGoogleLogin } from '@react-oauth/google';
 import { useAuth } from '../contexts/AuthContext';
-import { LogIn, User, Mail, Brain, FileText, Search, BarChart3, Shield, Zap, ArrowRight } from 'lucide-react';
+import { Brain, FileText, Search, BarChart3, Shield, Zap, ArrowRight } from 'lucide-react';
 
 export const LoginComponent: React.FC = () => {
-  const { user, isAuthenticated, isLoading, logout } = useAuth();
+  const { user, isAuthenticated, isLoading } = useAuth();
 
   const googleLogin = useGoogleLogin({
     onSuccess: (tokenResponse) => {
@@ -42,10 +42,6 @@ export const LoginComponent: React.FC = () => {
     googleLogin();
   };
 
-  const handleLogout = () => {
-    googleLogout();
-    logout();
-  };
 
   if (isLoading) {
     return (
@@ -55,44 +51,9 @@ export const LoginComponent: React.FC = () => {
     );
   }
 
+  // If user is authenticated, don't show anything - let the main App handle routing
   if (isAuthenticated && user) {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900">
-        <div className="bg-gray-800 rounded-lg shadow-xl p-8 max-w-md w-full mx-4">
-          <div className="text-center">
-            <div className="mb-6">
-              <div className="w-20 h-20 mx-auto mb-4 rounded-full bg-gray-700 flex items-center justify-center">
-                {user.picture ? (
-                  <img
-                    src={user.picture}
-                    alt={user.name}
-                    className="w-20 h-20 rounded-full object-cover"
-                  />
-                ) : (
-                  <User className="w-10 h-10 text-gray-400" />
-                )}
-              </div>
-              <h2 className="text-2xl font-bold text-white mb-2">Welcome back!</h2>
-              <p className="text-gray-300 mb-1">{user.name}</p>
-              <p className="text-gray-400 text-sm flex items-center justify-center gap-2">
-                <Mail className="w-4 h-4" />
-                {user.email}
-              </p>
-            </div>
-
-            <div className="space-y-4">
-              <button
-                onClick={handleLogout}
-                className="w-full bg-red-600 hover:bg-red-700 text-white font-medium py-3 px-4 rounded-lg transition-colors duration-200 flex items-center justify-center gap-2"
-              >
-                <LogIn className="w-5 h-5" />
-                Sign Out
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
+    return null;
   }
 
   return (
