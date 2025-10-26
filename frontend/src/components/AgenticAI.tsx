@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { BookOpen, Target, BarChart, Rocket, Search, Brain, CheckCircle, XCircle, Clock, Bot } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { useStore } from '@/store/useStore';
 
@@ -109,20 +110,21 @@ export const AgenticAI: React.FC<AgenticAIProps> = ({ onResearchComplete }) => {
 
   const getStatusIcon = (status: string) => {
     switch (status) {
-      case 'starting': return '🚀';
-      case 'searching': return '🔍';
-      case 'analyzing': return '🧠';
-      case 'completed': return '✅';
-      case 'failed': return '❌';
-      default: return '⏳';
+      case 'starting': return <Rocket className="w-4 h-4" />;
+      case 'searching': return <Search className="w-4 h-4" />;
+      case 'analyzing': return <Brain className="w-4 h-4" />;
+      case 'completed': return <CheckCircle className="w-4 h-4" />;
+      case 'failed': return <XCircle className="w-4 h-4" />;
+      default: return <Clock className="w-4 h-4" />;
     }
   };
 
   return (
     <div className="p-6 max-w-4xl mx-auto">
       <div className="bg-white rounded-lg shadow-lg p-6">
-        <h2 className="text-2xl font-bold text-gray-800 mb-6">
-          🤖 Agentic AI Research
+        <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
+          <Bot className="w-6 h-6" />
+          Agentic AI Research
         </h2>
         
         {!currentResearch && (
@@ -225,11 +227,22 @@ export const AgenticAI: React.FC<AgenticAIProps> = ({ onResearchComplete }) => {
                   <div className="text-green-800 font-medium">Research Completed!</div>
                   <div className="text-green-600">
                     {results ? (
-                      <>
-                        **Research Complete!** 📚 **Analyzed {results.papers_analyzed} papers** 🎯 **Research Gaps Identified:** {results.recommendations?.research_gaps?.length || 0} gaps found 📊 **Knowledge Graph:** {results.knowledge_graph?.nodes?.length || 0} entities, {results.knowledge_graph?.edges?.length || 0} relationships
-                        <br /><br />
-                        <strong>💾 Auto-Saving:</strong> PDFs are being downloaded and saved as a new project automatically!
-                      </>
+                      <div className="space-y-2">
+                        <div className="font-semibold">Research Complete!</div>
+                        <div className="flex items-center gap-2">
+                          <BookOpen className="w-4 h-4" />
+                          <span>Analyzed {results.papers_analyzed} papers</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Target className="w-4 h-4" />
+                          <span>Research Gaps Identified: {results.recommendations?.research_gaps?.length || 0} gaps found</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <BarChart className="w-4 h-4" />
+                          <span>Knowledge Graph: {results.knowledge_graph?.nodes?.length || 0} entities, {results.knowledge_graph?.edges?.length || 0} relationships</span>
+                        </div>
+                        <div className="mt-2 font-medium">Auto-Saving: PDFs are being downloaded and saved as a new project automatically!</div>
+                      </div>
                     ) : (
                       `Analyzed ${currentResearch.progress.papers_analyzed} papers and found ${currentResearch.progress.entities_extracted} entities.`
                     )}

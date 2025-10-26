@@ -13,6 +13,8 @@ import { ChatPanel } from './components/ChatPanel';
 import { NodeDetails } from './components/NodeDetails';
 import { LoginComponent } from './components/LoginComponent';
 import { ProjectSelection } from './components/ProjectSelection';
+import { HypothesisBar } from './components/HypothesisBar';
+import { Analytics } from './components/Analytics';
 
 function AppContent() {
   const {
@@ -248,6 +250,8 @@ function AppContent() {
             )}
           </div>
           <ChatPanel />
+          <HypothesisBar />
+          <Analytics />
         </>
       )}
 

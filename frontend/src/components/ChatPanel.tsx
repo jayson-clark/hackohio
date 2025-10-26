@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { MessageCircle, Bot, Send, Clock, Sparkles } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { useStore } from '@/store/useStore';
 
@@ -64,7 +65,6 @@ export const ChatPanel = () => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [open, setOpen] = useState(true);
   
   // Agentic AI state
   const [agentMode, setAgentMode] = useState(false);
@@ -259,68 +259,75 @@ export const ChatPanel = () => {
   };
 
   return (
-    <>
-      {!open ? (
-        <button
-          onClick={() => setOpen((v) => !v)}
-          className="fixed right-4 bottom-4 z-30 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white shadow-lg"
-        >
-          Chat
-        </button>
-      ) : null}
-
-      {!open ? null : (
-        <div className="fixed right-0 top-0 h-full w-[450px] bg-gray-900/95 border-l border-gray-800 backdrop-blur-md z-20 flex flex-col">
-      <div className="p-3 border-b border-gray-800 text-gray-200 font-semibold flex items-center justify-between">
-        <span>Smart Chat</span>
-        <div className="flex gap-2">
-          {/* Agent Mode Toggle - removed emoji */}
-          <button
-            onClick={() => setAgentMode(!agentMode)}
-            className={`text-xs px-2 py-1 rounded text-white ${
-              agentMode 
-                ? 'bg-green-600 hover:bg-green-500' 
-                : 'bg-gray-600 hover:bg-gray-500'
-            }`}
-          >
-            {agentMode ? 'Agent ON' : 'Agent OFF'}
-          </button>
-          
-          {/* Minimize Button - next to Agent Mode */}
-          <button
-            onClick={() => setOpen((v) => !v)}
-            className="text-xs px-2 py-1 bg-blue-600 hover:bg-blue-500 rounded text-white"
-          >
-            Minimize
-          </button>
-          
-          {messages.length > 0 && (
-            <button 
-              onClick={() => {
-                setMessages([]);
-                setHighlightedNodes(new Set());
-                setHighlightedLinks(new Set());
-              }} 
-              className="text-xs px-2 py-1 bg-red-600 hover:bg-red-500 rounded text-white"
+    <div className="fixed right-0 top-0 h-full w-[480px] bg-gradient-to-b from-gray-900/98 via-gray-900/98 to-gray-800/98 border-l-2 border-purple-500/30 backdrop-blur-xl z-20 flex flex-col shadow-2xl">
+      {/* Header */}
+      <div className="p-4 border-b border-gray-700/50 bg-gradient-to-r from-purple-900/20 to-blue-900/20">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center space-x-2">
+            <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+            <h2 className="text-xl font-bold bg-gradient-to-r from-purple-400 to-blue-400 bg-clip-text text-transparent">
+              Chat
+            </h2>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setAgentMode(!agentMode)}
+              className={`text-xs px-3 py-1.5 rounded-lg font-medium transition-all flex items-center space-x-1 ${
+                agentMode 
+                  ? 'bg-gradient-to-r from-green-600 to-green-500 text-white shadow-lg shadow-green-500/30' 
+                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              }`}
             >
-              Clear
+              <Bot className="w-3.5 h-3.5" />
+              <span>{agentMode ? 'Agent ON' : 'Agent OFF'}</span>
             </button>
-          )}
+            
+            {messages.length > 0 && (
+              <button 
+                onClick={() => {
+                  setMessages([]);
+                  setHighlightedNodes(new Set());
+                  setHighlightedLinks(new Set());
+                }} 
+                className="text-xs px-3 py-1.5 bg-red-600/20 hover:bg-red-600/30 rounded-lg text-red-400 font-medium transition-all border border-red-500/30"
+              >
+                Clear
+              </button>
+            )}
+          </div>
         </div>
+        
+        {/* Agent Mode Description */}
+        <p className="text-xs text-gray-400 flex items-center">
+          {agentMode ? (
+            <>
+              <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+              AI-powered research with automatic paper discovery
+            </>
+          ) : (
+            <>
+              <MessageCircle className="w-3.5 h-3.5 mr-1.5" />
+              Chat about your knowledge graph
+            </>
+          )}
+        </p>
       </div>
-      <div className="flex-1 overflow-auto p-3 space-y-3 mb-2">
+
+      {/* Messages Area */}
+      <div className="flex-1 overflow-auto p-4 space-y-4 pb-40 custom-scrollbar">
         {messages.map((m, i) => (
-          <div key={i} className={m.role === 'user' ? 'text-right' : 'text-left'}>
-            <div className={`inline-block px-3 py-2 rounded-lg max-w-[90%] ${
+          <div key={i} className={m.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
+            <div className={`inline-block px-4 py-3 rounded-2xl max-w-[85%] ${
               m.role === 'user' 
-                ? 'bg-blue-600 text-white' 
+                ? 'bg-gradient-to-r from-blue-600 to-blue-500 text-white shadow-lg shadow-blue-500/20' 
                 : m.isAgentic 
-                  ? 'bg-purple-800 text-purple-100 border border-purple-600' 
-                  : 'bg-gray-800 text-gray-100'
+                  ? 'bg-gradient-to-r from-purple-900/80 to-purple-800/80 text-purple-50 border border-purple-500/30 shadow-lg shadow-purple-500/10' 
+                  : 'bg-gray-800/80 text-gray-100 border border-gray-700/50'
             }`}>
               {m.isAgentic && (
-                <div className="text-xs text-purple-300 mb-1 font-medium">
-                  Agentic Research
+                <div className="text-xs text-purple-300 mb-2 font-semibold flex items-center">
+                  <Bot className="w-3.5 h-3.5 mr-1.5" />
+                  <span>Agentic Research</span>
                 </div>
               )}
               <div className="whitespace-pre-wrap break-words text-sm leading-relaxed">
@@ -329,20 +336,29 @@ export const ChatPanel = () => {
             </div>
           </div>
         ))}
+        
         {messages.length === 0 && (
-          <div className="text-gray-400 text-sm space-y-2">
-            <div className="font-medium text-gray-300">Try these examples:</div>
-            <div className="space-y-1">
-              <div>• "shortest path between TP53 and cancer"</div>
-              <div>• "neighbors of VEGF"</div>
-              <div>• "common connections TP53, BRCA1"</div>
+          <div className="text-center py-8 space-y-4">
+            <MessageCircle className="w-16 h-16 mx-auto text-gray-600 mb-4" />
+            <div className="text-gray-300 font-medium">Start a conversation</div>
+            <div className="text-gray-500 text-sm space-y-3 max-w-sm mx-auto">
+              <div className="bg-gray-800/50 rounded-lg p-3 border border-gray-700/50">
+                <div className="font-medium text-gray-400 mb-2">Graph Queries:</div>
+                <div className="space-y-1 text-xs text-gray-500">
+                  <div>• "shortest path between TP53 and cancer"</div>
+                  <div>• "neighbors of VEGF"</div>
+                  <div>• "common connections TP53, BRCA1"</div>
+                </div>
+              </div>
               {agentMode && (
-                <>
-                  <div className="text-purple-300 font-medium mt-2">Agentic Research:</div>
-                  <div>• "research gut microbiome and immunotherapy"</div>
-                  <div>• "find papers on cancer biomarkers"</div>
-                  <div>• "what is known about CRISPR therapy"</div>
-                </>
+                <div className="bg-purple-900/20 rounded-lg p-3 border border-purple-500/30">
+                  <div className="font-medium text-purple-400 mb-2">Agentic Research:</div>
+                  <div className="space-y-1 text-xs text-purple-300/70">
+                    <div>• "research gut microbiome and immunotherapy"</div>
+                    <div>• "find papers on cancer biomarkers"</div>
+                    <div>• "what is known about CRISPR therapy"</div>
+                  </div>
+                </div>
               )}
             </div>
           </div>
@@ -350,78 +366,84 @@ export const ChatPanel = () => {
         
         {/* Research Status Indicator - Micro Updates */}
         {isResearching && (
-          <div className="bg-purple-900/50 border border-purple-600 rounded-lg p-4 space-y-3">
+          <div className="bg-gradient-to-r from-purple-900/60 to-purple-800/60 border-2 border-purple-500/40 rounded-xl p-4 space-y-3 shadow-xl shadow-purple-500/20">
             {/* Loading spinner with current stage */}
             <div className="flex items-center space-x-3">
-              <div className="relative w-6 h-6">
-                <div className="absolute inset-0 border-2 border-transparent border-t-purple-400 rounded-full animate-spin"></div>
+              <div className="relative w-7 h-7">
+                <div className="absolute inset-0 border-3 border-transparent border-t-purple-400 border-r-purple-400 rounded-full animate-spin"></div>
               </div>
-              <span className="text-sm font-medium text-purple-100">
+              <span className="text-sm font-semibold text-purple-100">
                 {currentResearch?.current_stage || 'Processing...'}
               </span>
             </div>
             
-            {currentResearch && (
-              <div className="space-y-3">
-                {/* Progress counters */}
-                {currentResearch.progress && (
-                  <div className="text-xs text-purple-300 space-y-1 bg-purple-900/30 rounded p-2">
-                    <div className="flex justify-between">
-                      <span>Papers found:</span>
-                      <span className="font-medium text-purple-200">{currentResearch.progress.papers_found}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Papers analyzed:</span>
-                      <span className="font-medium text-purple-200">{currentResearch.progress.papers_analyzed}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Entities extracted:</span>
-                      <span className="font-medium text-purple-200">{currentResearch.progress.entities_extracted}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Relationships found:</span>
-                      <span className="font-medium text-purple-200">{currentResearch.progress.relationships_found}</span>
-                    </div>
-                  </div>
-                )}
+            {currentResearch && currentResearch.progress && (
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="bg-purple-900/40 rounded-lg p-2 border border-purple-500/20">
+                  <div className="text-purple-300 mb-1">Papers found</div>
+                  <div className="text-2xl font-bold text-purple-100">{currentResearch.progress.papers_found}</div>
+                </div>
+                <div className="bg-purple-900/40 rounded-lg p-2 border border-purple-500/20">
+                  <div className="text-purple-300 mb-1">Analyzed</div>
+                  <div className="text-2xl font-bold text-purple-100">{currentResearch.progress.papers_analyzed}</div>
+                </div>
+                <div className="bg-purple-900/40 rounded-lg p-2 border border-purple-500/20">
+                  <div className="text-purple-300 mb-1">Entities</div>
+                  <div className="text-2xl font-bold text-purple-100">{currentResearch.progress.entities_extracted}</div>
+                </div>
+                <div className="bg-purple-900/40 rounded-lg p-2 border border-purple-500/20">
+                  <div className="text-purple-300 mb-1">Relationships</div>
+                  <div className="text-2xl font-bold text-purple-100">{currentResearch.progress.relationships_found}</div>
+                </div>
               </div>
             )}
           </div>
         )}
       </div>
-      <div className="p-3 border-t border-gray-800 flex gap-2">
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              send();
+
+      {/* Input Area - Fixed at Bottom */}
+      <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-gray-900 via-gray-900 to-transparent border-t border-gray-700/50">
+        <div className="flex gap-2">
+          <textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                send();
+              }
+            }}
+            placeholder={
+              agentMode 
+                ? "Ask me to research anything..." 
+                : "Ask about your knowledge graph..."
             }
-          }}
-          placeholder={
-            agentMode 
-              ? "Ask me to research anything..." 
-              : "Ask about the graph or research topics..."
-          }
-          className="flex-1 bg-gray-800 text-gray-100 px-3 py-2 rounded outline-none border border-gray-700 resize-none min-h-[80px] max-h-[200px] overflow-y-auto"
-          rows={3}
-        />
-        <button
-          onClick={send}
-          disabled={loading || isResearching}
-          className={`px-4 py-2 rounded text-white font-medium ${
-            isResearching 
-              ? 'bg-purple-600 cursor-not-allowed' 
-              : 'bg-blue-600 hover:bg-blue-500'
-          } disabled:opacity-50`}
-        >
-          {isResearching ? 'Researching...' : loading ? 'Sending...' : 'Send'}
-        </button>
+            className="flex-1 bg-gray-800/80 text-gray-100 px-4 py-3 rounded-xl outline-none border-2 border-gray-700 focus:border-purple-500 resize-none transition-all placeholder-gray-500"
+            rows={2}
+          />
+          <button
+            onClick={send}
+            disabled={loading || isResearching}
+            className={`px-6 rounded-xl text-white font-semibold transition-all shadow-lg flex items-center justify-center ${
+              isResearching 
+                ? 'bg-purple-600/50 cursor-not-allowed' 
+                : 'bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-400 shadow-blue-500/30'
+            } disabled:opacity-50`}
+          >
+            {isResearching ? (
+              <Clock className="w-5 h-5 animate-pulse" />
+            ) : loading ? (
+              <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <Send className="w-5 h-5" />
+            )}
+          </button>
+        </div>
+        <div className="text-xs text-gray-500 mt-2 text-center">
+          Press Enter to send • Shift+Enter for new line
+        </div>
       </div>
     </div>
-      )}
-    </>
   );
 };
 

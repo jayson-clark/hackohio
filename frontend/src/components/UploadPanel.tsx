@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { Upload, Loader2, FileText, X } from 'lucide-react';
+import { Upload, Loader2, FileText, X, Network } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { useStore } from '@/store/useStore';
 import toast from 'react-hot-toast';
@@ -115,7 +115,7 @@ export function UploadPanel() {
     <div className="w-full max-w-2xl mx-auto p-6">
       <div className="bg-gradient-to-br from-gray-900 to-gray-800 rounded-2xl shadow-2xl p-8 border border-gray-700">
         <div className="text-center mb-8">
-          <div className="text-6xl mb-4">🧬</div>
+          <Network className="w-24 h-24 mx-auto mb-4 text-gray-600" />
           <h1 className="text-4xl font-bold text-white mb-2">
             Empirica
           </h1>

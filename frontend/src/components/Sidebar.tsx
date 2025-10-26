@@ -3,13 +3,14 @@ import {
   Search,
   Filter,
   Settings,
-  BarChart3,
   ChevronLeft,
   ChevronRight,
   Box,
   BoxSelect,
   Plus,
   LogOut,
+  Download,
+  Upload,
 } from 'lucide-react';
 import { useStore } from '@/store/useStore';
 import { ENTITY_COLORS, ENTITY_LABELS, EntityType } from '@/types';
@@ -28,7 +29,6 @@ export function Sidebar() {
     setViewMode,
     filteredGraphData,
     graphData,
-    toggleAnalytics,
     currentProject,
     setShowUploadPanel,
     setShowProjectSelection,
@@ -37,28 +37,6 @@ export function Sidebar() {
   const { user, logout } = useAuth();
 
   const [searchQuery, setSearchQuery] = useState('');
-  const [hypotheses, setHypotheses] = useState<
-    Array<{ title: string; explanation: string; entities: string[]; confidence: number }>
-  >([]);
-  const [loadingHyp, setLoadingHyp] = useState(false);
-
-  const fetchHypotheses = async () => {
-    if (!filteredGraphData) return;
-    setLoadingHyp(true);
-    try {
-      const res = await apiService.generateHypotheses(
-        filteredGraphData, 
-        undefined, 
-        10, 
-        currentProject?.project_id
-      );
-      setHypotheses(res.hypotheses || []);
-    } catch (e) {
-      setHypotheses([]);
-    } finally {
-      setLoadingHyp(false);
-    }
-  };
 
   const entityTypes = Object.keys(ENTITY_COLORS) as EntityType[];
 
@@ -93,7 +71,7 @@ export function Sidebar() {
       <div
         className={`fixed left-0 top-0 h-full bg-gradient-to-b from-gray-900 to-gray-800 border-r border-gray-700 transition-transform duration-300 z-20 ${
           sidebarOpen ? 'translate-x-0' : '-translate-x-full'
-        } w-80 overflow-y-auto`}
+        } w-96 overflow-y-auto`}
       >
         <div className="p-6 pt-20">
           {/* User Profile Card - Clickable to switch projects */}
@@ -274,65 +252,12 @@ export function Sidebar() {
             />
           </div>
 
-          {/* Analytics Button */}
-          <button
-            onClick={toggleAnalytics}
-            className="w-full py-3 px-4 bg-gradient-to-r from-primary-600 to-primary-500 text-white font-semibold rounded-lg hover:from-primary-700 hover:to-primary-600 transition-all flex items-center justify-center space-x-2"
-          >
-            <BarChart3 className="w-5 h-5" />
-            <span>View Analytics</span>
-          </button>
-
-          {/* Hypotheses */}
-          <div className="mt-6">
-            <div className="flex items-center justify-between mb-2">
-              <label className="block text-sm font-medium text-gray-300">Hypotheses</label>
-              <button
-                onClick={fetchHypotheses}
-                className="text-xs px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded border border-gray-700 text-gray-200"
-              >
-                {loadingHyp ? '...' : 'Generate'}
-              </button>
-            </div>
-            <div className="space-y-2 max-h-64 overflow-auto pr-1">
-              {hypotheses.length === 0 && (
-                <div className="text-xs text-gray-500">No hypotheses yet. Click Generate.</div>
-              )}
-              {hypotheses.map((h, idx) => (
-                <div
-                  key={idx}
-                  className="p-2 bg-gray-800 rounded border border-gray-700 cursor-pointer hover:bg-gray-750"
-                  onClick={() => {
-                    // Attempt to highlight hypothesis entities in the graph
-                    const nodes = new Set<string>(h.entities || []);
-                    const links = new Set<string>();
-                    // Edge pairs may be present for indirect hypotheses
-                    // @ts-ignore
-                    (h.edge_pairs || []).forEach(([a, b]) => links.add(`${a}-${b}`));
-                    // Fallback: connect all entities pairwise
-                    const es = h.entities || [];
-                    for (let i = 0; i < es.length; i++) {
-                      for (let j = i + 1; j < es.length; j++) {
-                        links.add(`${es[i]}-${es[j]}`);
-                      }
-                    }
-                    useStore.getState().setHighlightedNodes(nodes);
-                    useStore.getState().setHighlightedLinks(links);
-                  }}
-                >
-                  <div className="text-sm text-gray-100 font-semibold">{h.title}</div>
-                  <div className="text-xs text-gray-400 mt-1">{h.explanation}</div>
-                  <div className="text-xs text-gray-500 mt-1">Entities: {h.entities.join(', ')}</div>
-                  <div className="text-xs text-gray-500">Confidence: {(h.confidence * 100).toFixed(0)}%</div>
-                </div>
-              ))}
-            </div>
-          </div>
-
           {/* Export/Import */}
-          <div className="mt-6">
-            <label className="block text-sm font-medium text-gray-300 mb-2">Project</label>
-            <div className="flex gap-2">
+          <div className="mt-6 pt-6 border-t border-gray-700">
+            <label className="block text-sm font-medium text-gray-300 mb-3">
+              Project Management
+            </label>
+            <div className="space-y-2">
               <button
                 onClick={async () => {
                   if (!currentProject) {
@@ -356,9 +281,10 @@ export function Sidebar() {
                   }
                 }}
                 disabled={!currentProject}
-                className="flex-1 text-xs px-2 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded text-white"
+                className="w-full flex items-center justify-center space-x-2 px-4 py-2.5 bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-400 disabled:from-gray-700 disabled:to-gray-600 disabled:cursor-not-allowed rounded-lg text-white font-medium transition-all shadow-lg disabled:shadow-none"
               >
-                Export
+                <Download className="w-4 h-4" />
+                <span>Export Project</span>
               </button>
               <button
                 onClick={() => {
@@ -401,9 +327,10 @@ export function Sidebar() {
                   };
                   input.click();
                 }}
-                className="flex-1 text-xs px-2 py-2 bg-green-600 hover:bg-green-500 rounded text-white"
+                className="w-full flex items-center justify-center space-x-2 px-4 py-2.5 bg-gradient-to-r from-green-600 to-green-500 hover:from-green-500 hover:to-green-400 rounded-lg text-white font-medium transition-all shadow-lg"
               >
-                Import
+                <Upload className="w-4 h-4" />
+                <span>Import Project</span>
               </button>
             </div>
           </div>
