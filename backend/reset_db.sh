@@ -1,7 +1,7 @@
 #!/bin/bash
 # Reset database and clear all uploaded files
 
-echo "🗑️  Resetting Synapse Mapper Database..."
+echo "🗑️  Resetting Empirica Database..."
 echo ""
 
 # Remove database

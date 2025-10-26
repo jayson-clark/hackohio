@@ -117,7 +117,7 @@ export function UploadPanel() {
         <div className="text-center mb-8">
           <div className="text-6xl mb-4">🧬</div>
           <h1 className="text-4xl font-bold text-white mb-2">
-            Synapse Mapper
+            Empirica
           </h1>
           <p className="text-gray-400">
             Transform biomedical PDFs into interactive knowledge graphs

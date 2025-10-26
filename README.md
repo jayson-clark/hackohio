@@ -1,8 +1,8 @@
-# 🧬 Synapse Mapper
+# 🧬 Empirica
 
 **Transform biomedical PDFs into interactive knowledge graphs with AI-powered insights**
 
-Synapse Mapper is a sophisticated research intelligence tool that ingests biomedical PDF documents and automatically generates interactive, force-directed knowledge graphs. Each PDF gets its own graph, which can be dynamically combined for multi-document analysis. Enhanced with RAG (Retrieval-Augmented Generation) and LLM-powered insights via Lava Payments + Anthropic Claude.
+Empirica is a sophisticated research intelligence tool that ingests biomedical PDF documents and automatically generates interactive, force-directed knowledge graphs. Each PDF gets its own graph, which can be dynamically combined for multi-document analysis. Enhanced with RAG (Retrieval-Augmented Generation) and LLM-powered insights via Lava Payments + Anthropic Claude.
 
 ![Version](https://img.shields.io/badge/version-2.0-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.9+-green.svg)

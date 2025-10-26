@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# Synapse Mapper Run Script
+# Empirica Run Script
 # Starts both backend and frontend in tmux
 
 set -e
 
-echo "🧬 Starting Synapse Mapper..."
+echo "🧬 Starting Empirica..."
 echo ""
 
 # Check if tmux is installed
@@ -19,7 +19,7 @@ if ! command -v tmux &> /dev/null; then
 fi
 
 # Create new tmux session
-SESSION="synapse-mapper"
+SESSION="empirica"
 
 # Kill existing session if it exists
 tmux has-session -t $SESSION 2>/dev/null && tmux kill-session -t $SESSION
@@ -31,7 +31,7 @@ tmux new-session -d -s $SESSION -n backend "cd backend && source venv/bin/activa
 tmux new-window -t $SESSION -n frontend "cd frontend && npm run dev"
 
 # Attach to session
-echo "✅ Started Synapse Mapper in tmux session '$SESSION'"
+echo "✅ Started Empirica in tmux session '$SESSION'"
 echo ""
 echo "To view:"
 echo "  tmux attach -t $SESSION"

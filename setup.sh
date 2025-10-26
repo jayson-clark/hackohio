@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# Synapse Mapper Setup Script
+# Empirica Setup Script
 # Automated setup for backend and frontend
 
 set -e
 
-echo "🧬 Synapse Mapper Setup"
+echo "🧬 Empirica Setup"
 echo "======================="
 echo ""
 

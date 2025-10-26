@@ -94,7 +94,7 @@ export function Sidebar() {
           {/* Header */}
           <div className="mb-6">
             <h2 className="text-2xl font-bold text-white mb-1">
-              Synapse Mapper
+              Empirica
             </h2>
             <p className="text-sm text-gray-400">
               {filteredGraphData

@@ -1,4 +1,4 @@
-# Synapse Mapper - Frontend
+# Empirica - Frontend
 
 Interactive React application for visualizing biomedical knowledge graphs.
 

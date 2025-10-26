@@ -1,6 +1,6 @@
 # OAuth Setup Guide
 
-This guide will help you set up Google OAuth authentication for the Synapse Mapper frontend.
+This guide will help you set up Google OAuth authentication for the Empirica frontend.
 
 ## Prerequisites
 

@@ -16,7 +16,7 @@ export function ExportMenu() {
       const url = URL.createObjectURL(dataBlob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `synapse-mapper-graph-${Date.now()}.json`;
+      link.download = `empirica-graph-${Date.now()}.json`;
       link.click();
       URL.revokeObjectURL(url);
       toast.success('Graph data exported as JSON');
@@ -44,7 +44,7 @@ export function ExportMenu() {
       const nodesUrl = URL.createObjectURL(nodesBlob);
       const nodesLink = document.createElement('a');
       nodesLink.href = nodesUrl;
-      nodesLink.download = `synapse-mapper-nodes-${Date.now()}.csv`;
+      nodesLink.download = `empirica-nodes-${Date.now()}.csv`;
       nodesLink.click();
       URL.revokeObjectURL(nodesUrl);
 
@@ -66,7 +66,7 @@ export function ExportMenu() {
       const edgesUrl = URL.createObjectURL(edgesBlob);
       const edgesLink = document.createElement('a');
       edgesLink.href = edgesUrl;
-      edgesLink.download = `synapse-mapper-edges-${Date.now()}.csv`;
+      edgesLink.download = `empirica-edges-${Date.now()}.csv`;
       edgesLink.click();
       URL.revokeObjectURL(edgesUrl);
 
@@ -93,7 +93,7 @@ export function ExportMenu() {
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
-        link.download = `synapse-mapper-graph-${Date.now()}.png`;
+        link.download = `empirica-graph-${Date.now()}.png`;
         link.click();
         URL.revokeObjectURL(url);
         toast.success('Graph exported as image');

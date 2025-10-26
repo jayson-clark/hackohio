@@ -1,4 +1,4 @@
-# Synapse Mapper - Backend
+# Empirica - Backend
 
 FastAPI backend for processing biomedical PDFs and generating knowledge graphs.
 

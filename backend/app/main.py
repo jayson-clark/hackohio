@@ -119,7 +119,7 @@ from app.models import (
 
 # Initialize FastAPI app
 app = FastAPI(
-    title="Synapse Mapper API",
+    title="Empirica API",
     description="Transform biomedical PDFs into interactive knowledge graphs",
     version="1.0.0",
 )
@@ -158,7 +158,7 @@ async def startup_event():
     """Initialize database on startup"""
     init_db()
     print("✅ Database initialized")
-    print(f"✅ Synapse Mapper API running on http://{settings.api_host}:{settings.api_port}")
+    print(f"✅ Empirica API running on http://{settings.api_host}:{settings.api_port}")
 
 
 @app.get("/")
@@ -166,7 +166,7 @@ async def root():
     """Health check endpoint"""
     return {
         "status": "online",
-        "service": "Synapse Mapper API",
+        "service": "Empirica API",
         "version": "1.0.0",
         "llm_enabled": settings.enable_llm_extraction,
     }

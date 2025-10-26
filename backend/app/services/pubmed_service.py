@@ -11,7 +11,7 @@ class PubMedService:
     def __init__(self):
         self.base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
         # You should set this to a real email for NCBI compliance
-        self.email = "synapse-mapper@example.com"
+        self.email = "empirica@example.com"
     
     def search(self, query: str, max_results: int = 10) -> List[str]:
         """

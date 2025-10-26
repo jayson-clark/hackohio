@@ -1,10 +1,10 @@
-# Synapse Mapper Architecture
+# Empirica Architecture
 
 **Clean, modular biomedical research assistant with RAG-enhanced knowledge graphs**
 
 ## 🏗️ System Overview
 
-Synapse Mapper is a full-stack application that processes biomedical research papers, extracts knowledge graphs, and provides AI-powered insights through a RAG (Retrieval-Augmented Generation) system.
+Empirica is a full-stack application that processes biomedical research papers, extracts knowledge graphs, and provides AI-powered insights through a RAG (Retrieval-Augmented Generation) system.
 
 ### Core Features
 - ✅ **Per-PDF Graph System**: Each PDF gets its own knowledge graph
