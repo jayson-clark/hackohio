@@ -15,10 +15,10 @@ import { LoginComponent } from './components/LoginComponent';
 import { ProjectSelection } from './components/ProjectSelection';
 
 function AppContent() {
-  const { 
-    graphData, 
-    viewMode, 
-    filterOptions, 
+  const {
+    graphData,
+    viewMode,
+    filterOptions,
     setFilteredGraphData,
     currentProject,
     showProjectSelection,
@@ -113,6 +113,9 @@ function AppContent() {
     );
   }
 
+  // Force show LoginComponent for debugging
+  return <LoginComponent />;
+
   if (!isAuthenticated) {
     return <LoginComponent />;
   }
@@ -173,12 +176,12 @@ function AppContent() {
           setShowProjectSelection(false);
           setShowUploadPanel(false);
           setIsLoadingProject(true);
-          
+
           // Load project data
           try {
             const pdfs = await apiService.getProjectPdfs(project.project_id);
             setPdfs(pdfs);
-            
+
             // Load project graph
             const graphData = await apiService.getProjectGraph(project.project_id);
             setGraphData(graphData);
@@ -239,7 +242,7 @@ function AppContent() {
         <>
           <Sidebar />
           <NodeDetails />
-          
+
           <div className="w-full h-full">
             {viewMode.dimension === '2d' ? (
               <ForceGraph2DView />
