@@ -16,8 +16,7 @@ scispacy==0.5.4
 networkx==3.2.1
 python-louvain==0.16
 
-# LLM Integration
-openai==1.54.0
+# LLM Integration (Anthropic only)
 anthropic==0.39.0
 
 # Database

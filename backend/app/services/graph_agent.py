@@ -178,29 +178,16 @@ If no tool is needed, return:
         })
         
         try:
-            # Call LLM through Lava
-            if self.llm_service.use_lava:
-                response = await self.llm_service.lava_service.forward_openai_request(
-                    messages=messages,
-                    model="gpt-4-turbo-preview",
-                    temperature=0.3,
-                    response_format={"type": "json_object"},
-                    metadata={
-                        "service": "synapse_mapper",
-                        "task": "graph_chat"
-                    }
-                )
-                content = response['data']['choices'][0]['message']['content']
-            elif self.llm_service.openai_client:
+            # Use direct Anthropic API
+            if self.llm_service.anthropic_client:
                 import asyncio
                 response = await asyncio.to_thread(
-                    self.llm_service.openai_client.chat.completions.create,
-                    model="gpt-4-turbo-preview",
-                    messages=messages,
-                    temperature=0.3,
-                    response_format={"type": "json_object"}
+                    self.llm_service.anthropic_client.messages.create,
+                    model="claude-3-5-sonnet-20241022",
+                    max_tokens=4000,
+                    messages=messages
                 )
-                content = response.choices[0].message.content
+                content = response.content[0].text
             else:
                 return self._pattern_match_chat(user_message)
             

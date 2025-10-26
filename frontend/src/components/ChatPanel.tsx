@@ -5,7 +5,7 @@ import { useStore } from '@/store/useStore';
 type Message = { role: 'user' | 'assistant'; content: string };
 
 export const ChatPanel = () => {
-  const { filteredGraphData, setHighlightedNodes, setHighlightedLinks } = useStore();
+  const { filteredGraphData, setHighlightedNodes, setHighlightedLinks, currentProject } = useStore();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -18,14 +18,14 @@ export const ChatPanel = () => {
     setHighlightedNodes(new Set());
     setHighlightedLinks(new Set());
     
-    const nextHistory = [...messages, { role: 'user', content: input }];
+    const nextHistory = [...messages, { role: 'user' as const, content: input }];
     setMessages(nextHistory);
     setLoading(true);
     setInput(''); // Clear input immediately
     
     try {
-      const res = await apiService.chat(input, filteredGraphData, nextHistory);
-      setMessages([...nextHistory, { role: 'assistant', content: res.answer }]);
+      const res = await apiService.chat(input, filteredGraphData, nextHistory, currentProject?.project_id);
+      setMessages([...nextHistory, { role: 'assistant' as const, content: res.answer }]);
 
       // Highlight relevant nodes and edges
       const nodeSet = new Set<string>(res.relevant_nodes || []);
@@ -33,7 +33,7 @@ export const ChatPanel = () => {
       setHighlightedNodes(nodeSet);
       setHighlightedLinks(linkSet);
     } catch (e) {
-      setMessages([...nextHistory, { role: 'assistant', content: 'Error answering. Check backend.' }]);
+      setMessages([...nextHistory, { role: 'assistant' as const, content: 'Error answering. Check backend.' }]);
     } finally {
       setLoading(false);
     }

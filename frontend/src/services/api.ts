@@ -111,11 +111,12 @@ export const apiService = {
   /**
    * Chat with the graph
    */
-  async chat(message: string, graph: GraphData, conversationHistory: Array<{ role: string; content: string }> = []) {
+  async chat(message: string, graph: GraphData, conversationHistory: Array<{ role: string; content: string }> = [], projectId?: string) {
     const response = await api.post('/api/chat', {
       message,
       graph,
       conversation_history: conversationHistory,
+      project_id: projectId,
     });
     return response.data as {
       answer: string;
@@ -129,11 +130,12 @@ export const apiService = {
   /**
    * Generate hypotheses
    */
-  async generateHypotheses(graph: GraphData, focusEntity?: string, maxResults = 10) {
+  async generateHypotheses(graph: GraphData, focusEntity?: string, maxResults = 10, projectId?: string) {
     const response = await api.post('/api/hypotheses', {
       graph,
       focus_entity: focusEntity,
       max_results: maxResults,
+      project_id: projectId,
     });
     return response.data as {
       hypotheses: Array<{

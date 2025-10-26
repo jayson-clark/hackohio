@@ -41,7 +41,12 @@ export function Sidebar() {
     if (!filteredGraphData) return;
     setLoadingHyp(true);
     try {
-      const res = await apiService.generateHypotheses(filteredGraphData, undefined, 10);
+      const res = await apiService.generateHypotheses(
+        filteredGraphData, 
+        undefined, 
+        10, 
+        currentProject?.project_id
+      );
       setHypotheses(res.hypotheses || []);
     } catch (e) {
       setHypotheses([]);

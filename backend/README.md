@@ -7,7 +7,7 @@ FastAPI backend for processing biomedical PDFs and generating knowledge graphs.
 - 📄 **PDF Processing**: Extract text from biomedical PDFs using PyMuPDF
 - 🧬 **Named Entity Recognition**: scispaCy-powered entity extraction (genes, chemicals, diseases, etc.)
 - 🔗 **Relationship Extraction**: Co-occurrence and pattern-based relationship detection
-- 🤖 **LLM Enhancement** (Optional): Semantic relationship classification using OpenAI/Anthropic
+- 🤖 **LLM Enhancement** (Optional): Semantic relationship classification using Anthropic Claude
 - 📊 **Graph Analytics**: Community detection, centrality measures, and statistics
 - 💾 **Persistence**: SQLite/PostgreSQL for saving projects
 
@@ -105,5 +105,5 @@ backend/
 - **NetworkX**: Graph algorithms
 - **python-louvain**: Community detection
 - **SQLAlchemy**: Database ORM
-- **OpenAI/Anthropic** (optional): LLM enhancement
+- **Anthropic** (optional): LLM enhancement
 

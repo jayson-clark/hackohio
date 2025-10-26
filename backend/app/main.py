@@ -8,6 +8,60 @@ import shutil
 from pathlib import Path
 import asyncio
 from datetime import datetime
+import networkx as nx
+
+def _parse_confidence(confidence_value):
+    """
+    Parse confidence value from various formats to float.
+    Handles both numeric and string confidence values.
+    """
+    if isinstance(confidence_value, (int, float)):
+        return float(confidence_value)
+    
+    if isinstance(confidence_value, str):
+        confidence_lower = confidence_value.lower()
+        
+        # Map string confidence to numeric values
+        if confidence_lower in ['very high', 'very-high', 'veryhigh']:
+            return 0.9
+        elif confidence_lower in ['high', 'strong']:
+            return 0.8
+        elif confidence_lower in ['medium-high', 'medium high', 'mediumhigh']:
+            return 0.7
+        elif confidence_lower in ['medium', 'moderate']:
+            return 0.6
+        elif confidence_lower in ['medium-low', 'medium low', 'mediumlow']:
+            return 0.4
+        elif confidence_lower in ['low', 'weak']:
+            return 0.3
+        elif confidence_lower in ['very low', 'very-low', 'verylow']:
+            return 0.2
+        else:
+            # Default to medium confidence for unknown strings
+            return 0.5
+    
+    # Default fallback
+    return 0.5
+
+def _parse_evidence(evidence_value):
+    """
+    Parse evidence value to ensure it's a list.
+    Handles both string and list evidence values.
+    """
+    if isinstance(evidence_value, list):
+        return evidence_value
+    elif isinstance(evidence_value, str):
+        # Split string evidence into sentences or return as single item
+        if '. ' in evidence_value or '; ' in evidence_value:
+            # Split by common sentence delimiters
+            sentences = evidence_value.replace('; ', '. ').split('. ')
+            return [s.strip() for s in sentences if s.strip()]
+        else:
+            # Return as single sentence
+            return [evidence_value]
+    else:
+        # Default to empty list
+        return []
 
 from app.config import settings
 from app.models import (
@@ -19,6 +73,7 @@ from app.models import (
     init_db,
     get_db,
     Project,
+    Document,
     SessionLocal,
 )
 from app.services.auth_service import get_current_user, get_current_user_optional
@@ -30,10 +85,11 @@ from app.services import (
     GraphBuilder,
     LLMService,
     GraphConversationalAgent,
-    HypothesisAgent,
+    ContentInsightAgent,
+    RAGService,
+    DocumentChunker,
     PubMedService,
     ClinicalTrialsService,
-    LavaService,
 )
 from sqlalchemy.orm import Session
 from app.models import (
@@ -76,9 +132,10 @@ ner_service = NERService(model_name=_settings.scispacy_model)
 relationship_extractor = RelationshipExtractor()
 graph_builder = GraphBuilder()
 llm_service = LLMService()
+rag_service = RAGService(llm_service=llm_service)
+document_chunker = DocumentChunker(chunk_size=500, overlap=100)
 pubmed_service = PubMedService()
 ctgov_service = ClinicalTrialsService()
-lava_service = LavaService()
 
 # Storage for processing jobs
 processing_jobs = {}
@@ -230,17 +287,46 @@ async def process_pdfs_background(
                 # Extract text from this PDF
                 pdf_result = pdf_processor.process_pdfs([pdf_path])[0]
                 
-                if "error" in pdf_result:
+                # Check for errors or missing data
+                if "error" in pdf_result or not pdf_result.get("sentences"):
+                    print(f"✗ Error processing {original_name}: {pdf_result.get('error', 'No sentences extracted')}")
                     document.processed = -1
                     db.commit()
                     continue
                 
                 sentences = pdf_result.get("sentences", [])
+                full_text = " ".join(sentences)
                 
                 # Extract entities for this PDF
                 sentence_entities = ner_service.extract_entities_from_sentences(sentences)
                 filtered_entities = ner_service.filter_entities(sentence_entities)
                 unique_entities = ner_service.get_unique_entities(filtered_entities)
+                
+                # RAG: Chunk the document with entity tracking
+                # Flatten filtered_entities to get all entities from all sentences
+                entity_list = []
+                for sent_data in filtered_entities:
+                    for ent in sent_data["entities"]:
+                        entity_list.append({
+                            "text": ent["text"],
+                            "start": ent.get("start", 0),
+                            "end": ent.get("end", 0),
+                            "type": ent.get("type", "ENTITY")
+                        })
+                chunks = document_chunker.chunk_with_entities(
+                    text=full_text,
+                    doc_id=doc_id,
+                    entities=entity_list
+                )
+                
+                # RAG: Index document chunks
+                rag_service.index_document(
+                    doc_id=doc_id,
+                    text_chunks=chunks,
+                    entities=entity_list
+                )
+                
+                print(f"  → Indexed {len(chunks)} chunks for RAG")
                 
                 # Extract relationships for this PDF
                 relationships = relationship_extractor.extract_all_relationships(filtered_entities)
@@ -280,6 +366,8 @@ async def process_pdfs_background(
                 
             except Exception as e:
                 print(f"✗ Error processing {original_name}: {e}")
+                import traceback
+                traceback.print_exc()
                 document.processed = -1
                 db.commit()
         
@@ -300,12 +388,25 @@ async def process_pdfs_background(
                 merged_graph = graph_builder.merge_graphs(base_entities, base_rels, new_entities, new_rels)
             
             processing_jobs[job_id].result = merged_graph
+            
+            # RAG: Set graph context and save index
+            entity_metadata = {n.id: {"type": n.group.value, "count": n.metadata.get("count", 1)} 
+                             for n in merged_graph.nodes}
+            rag_service.set_graph_context(graph_builder.graph, entity_metadata)
+            
+            # Save RAG index for this project
+            rag_index_path = f"uploads/{project.id}_rag_index.pkl"
+            rag_service.save_index(rag_index_path)
+            print(f"✓ Saved RAG index to {rag_index_path}")
         
         # Complete
         processing_jobs[job_id].status = "completed"
         processing_jobs[job_id].progress = 1.0
         processing_jobs[job_id].message = f"Processed {total_pdfs} PDFs successfully!"
-        processing_jobs[job_id].result.metadata["project_id"] = project.id
+        
+        # Add project_id to result metadata if result exists
+        if processing_jobs[job_id].result:
+            processing_jobs[job_id].result.metadata["project_id"] = project.id
         
     except Exception as e:
         processing_jobs[job_id].status = "failed"
@@ -625,17 +726,40 @@ async def add_pdfs_to_project_background(
                 # Extract text from this PDF
                 pdf_result = pdf_processor.process_pdfs([pdf_path])[0]
                 
-                if "error" in pdf_result:
+                # Check for errors or missing data
+                if "error" in pdf_result or not pdf_result.get("sentences"):
+                    print(f"✗ Error processing {original_name}: {pdf_result.get('error', 'No sentences extracted')}")
                     document.processed = -1
                     db.commit()
                     continue
                 
                 sentences = pdf_result.get("sentences", [])
+                full_text = " ".join(sentences)
                 
                 # Extract entities for this PDF
                 sentence_entities = ner_service.extract_entities_from_sentences(sentences)
                 filtered_entities = ner_service.filter_entities(sentence_entities)
                 unique_entities = ner_service.get_unique_entities(filtered_entities)
+                
+                # RAG: Load existing index, chunk and index new document
+                rag_index_path = f"uploads/{project_id}_rag_index.pkl"
+                rag_service.load_index(rag_index_path)
+                
+                entity_list = [{"text": ent["text"], "start": 0, "end": 0, "type": ent["label"]} 
+                              for ent in filtered_entities]
+                chunks = document_chunker.chunk_with_entities(
+                    text=full_text,
+                    doc_id=doc_id,
+                    entities=entity_list
+                )
+                
+                rag_service.index_document(
+                    doc_id=doc_id,
+                    text_chunks=chunks,
+                    entities=entity_list
+                )
+                
+                print(f"  → Indexed {len(chunks)} chunks for RAG")
                 
                 # Extract relationships for this PDF
                 relationships = relationship_extractor.extract_all_relationships(filtered_entities)
@@ -673,8 +797,15 @@ async def add_pdfs_to_project_background(
                 
             except Exception as e:
                 print(f"✗ Error processing {original_name}: {e}")
+                import traceback
+                traceback.print_exc()
                 document.processed = -1
                 db.commit()
+        
+        # RAG: Save updated index
+        rag_index_path = f"uploads/{project_id}_rag_index.pkl"
+        rag_service.save_index(rag_index_path)
+        print(f"✓ Updated RAG index at {rag_index_path}")
         
         # Complete
         processing_jobs[job_id].status = "completed"
@@ -849,12 +980,116 @@ async def chat_with_graph(
             })
         
         graph_builder.build_graph(entities, relationships)
+        
+        # RAG: Try to get project_id and load RAG context
+        project_id = (payload or {}).get("project_id")
+        rag_context = None
+        documents = []
+        if project_id:
+            try:
+                # Get documents for this project
+                db = SessionLocal()
+                try:
+                    documents = db.query(Document).filter(Document.project_id == project_id).all()
+                    documents = [
+                        {
+                            "id": doc.id,
+                            "name": doc.filename,
+                            "selected": doc.selected
+                        }
+                        for doc in documents
+                    ]
+                finally:
+                    db.close()
+                
+                rag_index_path = f"uploads/{project_id}_rag_index.pkl"
+                if rag_service.load_index(rag_index_path):
+                    # Set graph context
+                    rag_service.set_graph_context(graph_builder.graph, entities)
+                    
+                    # Extract entities from user message (more robust matching)
+                    user_entities = []
+                    message_lower = message.lower()
+                    for entity_name in entities.keys():
+                        # Check for exact match, partial match, or word boundary match
+                        if (entity_name.lower() in message_lower or 
+                            any(word in message_lower for word in entity_name.lower().split()) or
+                            any(word in entity_name.lower() for word in message_lower.split())):
+                            user_entities.append(entity_name)
+                    
+                    # Always retrieve context, even for general questions
+                    print(f"🔍 User message: '{message}'")
+                    print(f"🔍 Found {len(user_entities)} matching entities: {user_entities[:5]}")
+                    
+                    # Check if user is asking about a specific paper
+                    target_doc_id = None
+                    message_lower = message.lower()
+                    if any(keyword in message_lower for keyword in ['paper1', 'paper 1', 'first paper', 'document1', 'document 1']):
+                        # Find paper1 document ID
+                        for doc in documents:
+                            if 'paper1' in doc.get('name', '').lower() or 'paper 1' in doc.get('name', '').lower():
+                                target_doc_id = doc.get('id')
+                                print(f"🎯 Targeting specific paper: {doc.get('name')} (ID: {target_doc_id})")
+                                break
+                    elif any(keyword in message_lower for keyword in ['paper2', 'paper 2', 'second paper', 'document2', 'document 2']):
+                        # Find paper2 document ID
+                        for doc in documents:
+                            if 'paper2' in doc.get('name', '').lower() or 'paper 2' in doc.get('name', '').lower():
+                                target_doc_id = doc.get('id')
+                                print(f"🎯 Targeting specific paper: {doc.get('name')} (ID: {target_doc_id})")
+                                break
+                    
+                    # Use more entities for better context, or all if few entities
+                    context_entities = user_entities if user_entities else list(entities.keys())[:10]
+                    
+                    rag_context = rag_service.retrieve_context_for_query(
+                        query=message,
+                        entities=context_entities,
+                        top_k=8,  # Increased for better context
+                        include_graph_context=True,
+                        target_doc_id=target_doc_id
+                    )
+                    print(f"✓ Retrieved {len(rag_context.get('chunks', []))} chunks for chat")
+            except Exception as e:
+                print(f"RAG retrieval for chat failed: {e}")
 
         # Create agent with LLM service for intelligent chat
         agent = GraphConversationalAgent(graph_builder.graph, llm_service=llm_service)
         
-        # Use LLM-powered chat if available, otherwise fallback to pattern matching
-        result = await agent.chat(message, conversation_history)
+        # If RAG context available and LLM enabled, use RAG-enhanced prompt
+        if rag_context and llm_service.enabled:
+            try:
+                # Build RAG prompt for answering
+                rag_prompt = rag_service.build_rag_prompt(
+                    query=message,
+                    context=rag_context,
+                    task_type="answer"
+                )
+                
+                print(f"🤖 Using RAG-enhanced prompt with {len(rag_context.get('chunks', []))} chunks")
+                
+                # Use the RAG-enhanced prompt directly with LLM
+                llm_response = await llm_service.chat([{"role": "user", "content": rag_prompt}])
+                
+                # Create result in expected format
+                result = {
+                    "answer": llm_response,
+                    "relevant_nodes": list(entities.keys())[:5],  # Top entities as relevant nodes
+                    "citations": []
+                }
+                
+                # Enhance answer with RAG citations if available
+                if rag_context.get("chunks"):
+                    citations = [f"{chunk.get('doc_id', 'unknown')} (page {chunk.get('page', '?')})" 
+                               for chunk in rag_context["chunks"][:3]]
+                    result["citations"] = citations
+            except Exception as e:
+                print(f"RAG-enhanced chat failed: {e}")
+                # Fallback to regular chat
+                result = await agent.chat(message, conversation_history)
+        else:
+            # Use LLM-powered chat if available, otherwise fallback to pattern matching
+            result = await agent.chat(message, conversation_history)
         
         return ChatResponse(
             answer=result.get("answer", ""),
@@ -879,43 +1114,155 @@ async def generate_hypotheses(
         edges = graph.get("edges", [])
         focus_entity = (payload or {}).get("focus_entity")
         max_results = int((payload or {}).get("max_results", 10))
+        project_id = (payload or {}).get("project_id")
 
-        entities = {
-            n.get("id"): {
-                "original_name": n.get("id"),
-                "type": (n.get("group") or "UNKNOWN"),
-                "count": (n.get("metadata") or {}).get("count", 1),
-            }
-            for n in nodes
-            if n.get("id")
-        }
-        relationships = []
-        for e in edges:
-            relationships.append({
-                "source": e.get("source"),
-                "target": e.get("target"),
-                "weight": e.get("value", 1.0),
-                "evidence": (e.get("metadata") or {}).get("all_evidence", [e.get("title", "")]),
-                "relationship_type": (e.get("metadata") or {}).get("relationship_type", "CO_OCCURRENCE"),
+        # Build NetworkX graph for analysis
+        nx_graph = nx.Graph()
+        
+        print(f"DEBUG: Processing {len(nodes)} nodes and {len(edges)} edges")
+        if nodes:
+            print(f"DEBUG: Sample node: {nodes[0]}")
+        if edges:
+            print(f"DEBUG: Sample edge: {edges[0]}")
+        
+        # Add nodes (just the IDs, metadata will be handled separately)
+        for node in nodes:
+            node_id = node.get("id")
+            # Handle case where node might be a dictionary
+            if isinstance(node_id, dict):
+                node_id = node_id.get("id", str(node_id))
+            if node_id:
+                nx_graph.add_node(node_id)
+        
+        # Add edges with metadata
+        for edge in edges:
+            source = edge.get("source")
+            target = edge.get("target")
+            
+            # Handle case where source/target might be dictionaries
+            if isinstance(source, dict):
+                source = source.get("id", str(source))
+            if isinstance(target, dict):
+                target = target.get("id", str(target))
+            
+            if source and target:
+                evidence = edge.get("metadata", {}).get("all_evidence", [])
+                # Convert evidence list to string to avoid unhashable type issues
+                evidence_str = "; ".join(evidence) if isinstance(evidence, list) else str(evidence)
+                nx_graph.add_edge(source, target,
+                                 weight=edge.get("value", 1.0),
+                                 relationship_type=edge.get("metadata", {}).get("relationship_type", "CO_OCCURRENCE"),
+                                 evidence=evidence_str)
+
+        # Get document data if project_id is provided
+        documents_data = []
+        if project_id:
+            db = SessionLocal()
+            try:
+                documents = db.query(Document).filter(Document.project_id == project_id).all()
+                documents_data = [
+                    {
+                        "name": doc.filename,
+                        "type": "PDF",
+                        "id": doc.id,
+                        "selected": doc.selected
+                    }
+                    for doc in documents
+                ]
+            finally:
+                db.close()
+
+        # RAG: Load index and retrieve relevant context
+        rag_context = None
+        if project_id:
+            try:
+                rag_index_path = f"uploads/{project_id}_rag_index.pkl"
+                if rag_service.load_index(rag_index_path):
+                    print(f"✓ Loaded RAG index from {rag_index_path}")
+                    
+                    # Set graph context
+                    entity_metadata = {node.get("id"): {"type": node.get("group", "UNKNOWN"), 
+                                                        "count": node.get("metadata", {}).get("count", 1)} 
+                                     for node in nodes if node.get("id")}
+                    rag_service.set_graph_context(nx_graph, entity_metadata)
+                    
+                    # Get top entities from graph
+                    top_entities = [node_id for node_id, degree in sorted(
+                        nx_graph.degree(), 
+                        key=lambda x: x[1], 
+                        reverse=True
+                    )][:10]
+                    
+                    # Retrieve relevant context
+                    rag_context = rag_service.retrieve_context_for_query(
+                        query="Generate research hypotheses and insights",
+                        entities=top_entities if not focus_entity else [focus_entity] + top_entities,
+                        top_k=10,
+                        include_graph_context=True
+                    )
+                    
+                    print(f"✓ Retrieved {len(rag_context.get('chunks', []))} relevant chunks from RAG")
+            except Exception as e:
+                print(f"RAG retrieval failed: {e}")
+        
+        # Use ContentInsightAgent for better insights
+        # Pass the original node data for metadata
+        print(f"DEBUG: Creating ContentInsightAgent with {len(nx_graph.nodes())} nodes, {len(nx_graph.edges())} edges")
+        print(f"DEBUG: Documents data: {len(documents_data)} documents")
+        print(f"DEBUG: Original nodes: {len(nodes)} nodes")
+        
+        insight_agent = ContentInsightAgent(nx_graph, documents_data, nodes)
+        print("DEBUG: ContentInsightAgent created successfully")
+        
+        # Try to use LLM if available with RAG context, otherwise fall back to pattern-based insights
+        if llm_service.enabled:
+            try:
+                # Use RAG prompt if context available, otherwise use basic prompt
+                if rag_context:
+                    prompt = rag_service.build_rag_prompt(
+                        query=f"Generate research hypotheses{' focusing on ' + focus_entity if focus_entity else ''}",
+                        context=rag_context,
+                        task_type="hypothesis"
+                    )
+                    print(f"✓ Using RAG-enhanced prompt with {len(rag_context.get('chunks', []))} chunks")
+                else:
+                    # Fallback to ContentInsightAgent prompt
+                    prompt = insight_agent.get_llm_prompt(focus_entity)
+                
+                # Use LLM to generate insights
+                llm_response = await llm_service.generate_insights(prompt)
+                
+                if llm_response:
+                    insights = llm_response
+                else:
+                    # Fallback to pattern-based insights
+                    insights = insight_agent.generate_insights(focus_entity, max_results)
+            except Exception as e:
+                print(f"LLM insight generation failed: {e}")
+                # Fallback to pattern-based insights
+                insights = insight_agent.generate_insights(focus_entity, max_results)
+        else:
+            # Use pattern-based insights
+            insights = insight_agent.generate_insights(focus_entity, max_results)
+
+        # Normalize insights to match expected format
+        normalized = []
+        for insight in insights[:max_results]:
+            normalized.append({
+                "title": insight.get("title", "Research Insight"),
+                "explanation": insight.get("description", insight.get("explanation", "")),
+                "entities": insight.get("entities", []),
+                "evidence_sentences": _parse_evidence(insight.get("evidence", [])),
+                "edge_pairs": [],  # Not used in new format
+                "confidence": _parse_confidence(insight.get("confidence", 0.5)),
+                "type": insight.get("type", "insight")
             })
-        graph_builder.build_graph(entities, relationships)
-
-        agent = HypothesisAgent(graph_builder.graph)
-        hyps = agent.generate(focus=focus_entity, max_results=max_results)
-        normalized = [
-            {
-                "title": h["title"],
-                "explanation": h["explanation"],
-                "entities": h.get("entities", []),
-                "evidence_sentences": h.get("evidence_sentences", []),
-                "edge_pairs": h.get("edge_pairs", []),
-                "confidence": float(h.get("confidence", 0.5)),
-            }
-            for h in hyps
-        ]
 
         return HypothesesResponse(hypotheses=normalized)
     except Exception as e:
+        import traceback
+        print(f"Hypothesis generation error: {e}")
+        print(f"Full traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1047,7 +1394,7 @@ async def rename_project(
     
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    
+        
     if not new_name.strip():
         raise HTTPException(status_code=400, detail="Project name cannot be empty")
     
@@ -1130,6 +1477,18 @@ async def export_project(
                 graph=pdf_graph
             ))
         
+        # Export RAG index if it exists
+        rag_index_data = None
+        rag_index_path = f"uploads/{project_id}_rag_index.pkl"
+        if os.path.exists(rag_index_path):
+            try:
+                import pickle
+                with open(rag_index_path, 'rb') as f:
+                    rag_index_data = pickle.load(f)
+                print(f"✓ Exported RAG index with {len(rag_index_data.get('document_chunks', {}))} documents")
+            except Exception as e:
+                print(f"⚠️  Failed to export RAG index: {e}")
+        
         from app.models.schemas import ProjectExport
         return ProjectExport(
             project_name=project.name,
@@ -1137,7 +1496,7 @@ async def export_project(
             created_at=project.created_at.isoformat(),
             updated_at=project.updated_at.isoformat(),
             pdf_graphs=pdf_graphs,
-            settings={}
+            settings={"rag_index": rag_index_data} if rag_index_data else {}
         )
     except HTTPException:
         raise
@@ -1210,6 +1569,19 @@ async def import_project(
                 db.add(pdf_edge)
             
             db.commit()
+        
+        # Import RAG index if it exists in the export
+        settings = project_data.get("settings", {})
+        rag_index_data = settings.get("rag_index")
+        if rag_index_data:
+            try:
+                import pickle
+                rag_index_path = f"uploads/{project.id}_rag_index.pkl"
+                with open(rag_index_path, 'wb') as f:
+                    pickle.dump(rag_index_data, f)
+                print(f"✓ Imported RAG index with {len(rag_index_data.get('document_chunks', {}))} documents")
+            except Exception as e:
+                print(f"⚠️  Failed to import RAG index: {e}")
         
         return {
             "status": "success",
@@ -1400,64 +1772,6 @@ async def discover_trials(req: TrialDiscoveryRequest):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-# ==== Lava Payments Endpoints ====
-
-@app.get("/api/lava/usage")
-async def get_lava_usage():
-    """Get LLM usage statistics from Lava Payments"""
-    try:
-        if not lava_service.enabled:
-            return {"enabled": False, "message": "Lava Payments is not configured"}
-        
-        usage = await lava_service.get_usage_stats()
-        return {"enabled": True, **usage}
-    except Exception as e:
-        import traceback
-        print(f"Lava usage error: {e}")
-        print(traceback.format_exc())
-        # Return graceful fallback
-        return {
-            "enabled": True,
-            "error": str(e),
-            "message": "Usage endpoint unavailable. Use /api/lava/requests to see activity."
-        }
-
-
-@app.get("/api/lava/requests")
-async def list_lava_requests(
-    limit: int = 50,
-    cursor: Optional[str] = None,
-    metadata_filter: Optional[str] = None
-):
-    """List tracked API requests from Lava"""
-    try:
-        if not lava_service.enabled:
-            return {"enabled": False, "message": "Lava Payments is not configured"}
-        
-        import json
-        metadata = json.loads(metadata_filter) if metadata_filter else None
-        
-        requests = await lava_service.list_requests(
-            limit=limit,
-            cursor=cursor,
-            metadata=metadata
-        )
-        return {"enabled": True, **requests}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/lava/status")
-async def get_lava_status():
-    """Check Lava Payments configuration status"""
-    return {
-        "enabled": lava_service.enabled,
-        "configured": bool(settings.lava_secret_key),
-        "has_connection_secret": bool(settings.lava_connection_secret),
-        "has_product_secret": bool(settings.lava_product_secret),
-    }
 
 
 if __name__ == "__main__":

@@ -1,15 +1,9 @@
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 import asyncio
+import json
 from app.config import settings
-from app.services.lava_service import LavaService
 
-# Optional LLM imports
-try:
-    import openai
-    OPENAI_AVAILABLE = True
-except ImportError:
-    OPENAI_AVAILABLE = False
-
+# Only Anthropic import
 try:
     import anthropic
     ANTHROPIC_AVAILABLE = True
@@ -19,27 +13,27 @@ except ImportError:
 
 class LLMService:
     """
-    Optional LLM-powered relationship extraction and classification
-    Enhances basic co-occurrence with semantic understanding
-    Routes through Lava Payments for usage-based billing when enabled
+    LLM-powered features using Anthropic Claude
+    Direct Anthropic API integration
     """
     
     def __init__(self):
-        self.lava_service = LavaService()
-        self.use_lava = self.lava_service.enabled
         
-        # Enable LLM if either Lava is enabled OR direct API keys are provided
-        self.enabled = settings.enable_llm_extraction or self.use_lava
-        
-        self.openai_client = None
+        # Use Anthropic API directly
+        anthropic_key = "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"
         self.anthropic_client = None
         
-        if self.enabled and not self.use_lava:
-            # Only initialize direct clients if NOT using Lava
-            if OPENAI_AVAILABLE and settings.openai_api_key:
-                self.openai_client = openai.OpenAI(api_key=settings.openai_api_key)
-            elif ANTHROPIC_AVAILABLE and settings.anthropic_api_key:
-                self.anthropic_client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        if ANTHROPIC_AVAILABLE:
+            try:
+                self.anthropic_client = anthropic.Anthropic(api_key=anthropic_key)
+                self.enabled = True
+                print("✅ LLM service enabled with direct Anthropic API")
+            except Exception as e:
+                print(f"⚠️  Failed to initialize Anthropic client: {e}")
+                self.enabled = False
+        else:
+            print("⚠️  Anthropic library not available")
+            self.enabled = False
     
     async def extract_relationships_from_sentence(
         self,
@@ -53,18 +47,10 @@ class LLMService:
         if not self.enabled:
             return []
         
-        if not self.use_lava and not (self.openai_client or self.anthropic_client):
-            return []
-        
         prompt = self._build_extraction_prompt(sentence, entities)
         
         try:
-            # Prefer Lava if enabled, otherwise use direct clients
-            if self.use_lava:
-                return await self._extract_with_openai(prompt)
-            elif self.openai_client:
-                return await self._extract_with_openai(prompt)
-            elif self.anthropic_client:
+            if self.anthropic_client:
                 return await self._extract_with_anthropic(prompt)
         except Exception as e:
             print(f"LLM extraction failed: {e}")
@@ -95,82 +81,42 @@ If no clear relationships exist, return an empty array.
 """
         return prompt
     
-    async def _extract_with_openai(self, prompt: str) -> List[Dict[str, any]]:
-        """Extract using OpenAI GPT (via Lava if enabled)"""
-        try:
-            messages = [
-                {"role": "system", "content": "You are a biomedical relationship extraction expert."},
-                {"role": "user", "content": prompt}
-            ]
-            
-            if self.use_lava:
-                # Route through Lava for usage tracking
-                response_data = await self.lava_service.forward_openai_request(
-                    messages=messages,
-                    model="gpt-4-turbo-preview",
-                    temperature=0.3,
-                    response_format={"type": "json_object"},
-                    metadata={
-                        "service": "synapse_mapper",
-                        "task": "relationship_extraction"
-                    }
-                )
-                # Extract content from Lava response
-                import json
-                result = json.loads(response_data['data']['choices'][0]['message']['content'])
-                return result.get("relationships", [])
-            else:
-                # Direct OpenAI call
-                response = await asyncio.to_thread(
-                    self.openai_client.chat.completions.create,
-                    model="gpt-4-turbo-preview",
-                    messages=messages,
-                    temperature=0.3,
-                    response_format={"type": "json_object"}
-                )
-                
-                import json
-                result = json.loads(response.choices[0].message.content)
-                return result.get("relationships", [])
-        except Exception as e:
-            print(f"OpenAI extraction error: {e}")
-            return []
     
     async def _extract_with_anthropic(self, prompt: str) -> List[Dict[str, any]]:
-        """Extract using Anthropic Claude (via Lava if enabled)"""
+        """Extract using direct Anthropic API"""
         try:
             messages = [{"role": "user", "content": prompt}]
             
-            if self.use_lava:
-                # Route through Lava for usage tracking
-                response_data = await self.lava_service.forward_anthropic_request(
-                    messages=messages,
-                    model="claude-3-sonnet-20240229",
-                    max_tokens=1024,
-                    temperature=0.3,
-                    metadata={
-                        "service": "synapse_mapper",
-                        "task": "relationship_extraction"
-                    }
-                )
-                # Extract content from Lava response
-                import json
-                result = json.loads(response_data['data']['content'][0]['text'])
-                return result if isinstance(result, list) else result.get("relationships", [])
-            else:
-                # Direct Anthropic call
-                response = await asyncio.to_thread(
-                    self.anthropic_client.messages.create,
-                    model="claude-3-sonnet-20240229",
-                    max_tokens=1024,
-                    messages=messages
-                )
+            response = await asyncio.to_thread(
+                self.anthropic_client.messages.create,
+                model="claude-3-haiku-20240307",
+                max_tokens=500,
+                messages=messages
+            )
+            
+            content = response.content[0].text
+            
+            # Parse JSON response
+            try:
+                relationships = json.loads(content)
+                if isinstance(relationships, list):
+                    return relationships
+                elif isinstance(relationships, dict):
+                    # Handle case where LLM returns a single relationship as dict
+                    if "relationships" in relationships:
+                        return relationships["relationships"] if isinstance(relationships["relationships"], list) else [relationships["relationships"]]
+                    elif "source" in relationships and "target" in relationships:
+                        # Single relationship returned as dict, wrap in list
+                        return [relationships]
+                    else:
+                        return []
+                else:
+                    return []
+            except json.JSONDecodeError:
+                return []
                 
-                import json
-                result = json.loads(response.content[0].text)
-                return result if isinstance(result, list) else result.get("relationships", [])
         except Exception as e:
-            print(f"Anthropic extraction error: {e}")
+            print(f"Anthropic extraction failed: {e}")
             return []
     
     async def classify_relationship(
@@ -180,22 +126,19 @@ If no clear relationships exist, return an empty array.
         evidence: str
     ) -> Optional[str]:
         """
-        Classify a relationship between two entities
-        Returns semantic relationship type
+        Classify the type of relationship between two entities
+        Returns relationship type or None
         """
         if not self.enabled:
             return None
         
-        if not self.use_lava and not (self.openai_client or self.anthropic_client):
-            return None
-        
-        prompt = f"""Classify the relationship between these two biomedical entities based on the evidence.
+        prompt = f"""Given the following biomedical entities and evidence, classify the relationship type.
 
 Source Entity: {source}
 Target Entity: {target}
 Evidence: {evidence}
 
-Choose ONE of these relationship types:
+Choose the most appropriate relationship type:
 - INHIBITS
 - ACTIVATES
 - TREATS
@@ -212,32 +155,8 @@ Return only the relationship type, nothing else.
         try:
             messages = [{"role": "user", "content": prompt}]
             
-            # Prefer Lava, then fall back to direct clients
-            if self.use_lava:
-                # Route through Lava (defaults to OpenAI)
-                response_data = await self.lava_service.forward_openai_request(
-                    messages=messages,
-                    model="gpt-3.5-turbo",
-                    temperature=0.1,
-                    max_tokens=20,
-                    metadata={
-                        "service": "synapse_mapper",
-                        "task": "relationship_classification"
-                    }
-                )
-                return response_data['data']['choices'][0]['message']['content'].strip()
-            elif self.openai_client:
-                # Direct OpenAI call
-                response = await asyncio.to_thread(
-                    self.openai_client.chat.completions.create,
-                    model="gpt-3.5-turbo",
-                    messages=messages,
-                    temperature=0.1,
-                    max_tokens=20
-                )
-                return response.choices[0].message.content.strip()
-            elif self.anthropic_client:
-                # Direct Anthropic call
+            # Use direct Anthropic API
+            if self.anthropic_client:
                 response = await asyncio.to_thread(
                     self.anthropic_client.messages.create,
                     model="claude-3-haiku-20240307",
@@ -250,4 +169,100 @@ Return only the relationship type, nothing else.
             return None
         
         return None
-
+    
+    async def generate_insights(self, prompt: str) -> List[Dict[str, Any]]:
+        """
+        Generate research insights using LLM analysis of extracted content.
+        
+        Args:
+            prompt: Comprehensive prompt with research data and analysis request
+            
+        Returns:
+            List of insight dictionaries with title, description, entities, etc.
+        """
+        if not self.enabled:
+            return []
+        
+        try:
+            messages = [{"role": "user", "content": prompt}]
+            
+            # Use direct Anthropic API
+            if self.anthropic_client:
+                response = await asyncio.to_thread(
+                    self.anthropic_client.messages.create,
+                    model="claude-3-5-sonnet-20241022",
+                    max_tokens=2000,
+                    temperature=0.3,
+                    messages=messages
+                )
+                response_text = response.content[0].text
+            else:
+                return []
+            
+            # Parse JSON response
+            try:
+                insights = json.loads(response_text)
+                if isinstance(insights, list):
+                    return insights
+                elif isinstance(insights, dict):
+                    # Handle case where LLM returns a single insight as dict
+                    # Convert to list format
+                    if "insights" in insights:
+                        return insights["insights"] if isinstance(insights["insights"], list) else [insights["insights"]]
+                    elif "hypotheses" in insights:
+                        # Handle hypotheses format from LLM
+                        return insights["hypotheses"] if isinstance(insights["hypotheses"], list) else [insights["hypotheses"]]
+                    elif "research_hypotheses" in insights:
+                        # Handle research_hypotheses format from LLM
+                        return insights["research_hypotheses"] if isinstance(insights["research_hypotheses"], list) else [insights["research_hypotheses"]]
+                    elif "title" in insights or "description" in insights:
+                        # Single insight returned as dict, wrap in list
+                        return [insights]
+                    else:
+                        # Get the keys to help debug what format was received
+                        keys = list(insights.keys())[:3]  # Show first 3 keys
+                        print(f"Unexpected dict format with keys: {keys}")
+                        return []
+                else:
+                    print(f"Unexpected LLM response format: {type(insights)}")
+                    return []
+            except json.JSONDecodeError as e:
+                print(f"Failed to parse LLM insights JSON: {e}")
+                print(f"Response: {response_text}")
+                return []
+                
+        except Exception as e:
+            print(f"LLM insight generation failed: {e}")
+            return []
+        
+        return []
+    
+    async def chat(self, messages: List[Dict[str, str]], model: str = "claude-3-5-sonnet-20241022") -> str:
+        """
+        General chat/completion using Anthropic Claude
+        
+        Args:
+            messages: List of message dicts with 'role' and 'content'
+            model: Claude model to use
+            
+        Returns:
+            Response text
+        """
+        if not self.enabled:
+            return ""
+        
+        try:
+            if self.anthropic_client:
+                response = await asyncio.to_thread(
+                    self.anthropic_client.messages.create,
+                    model="claude-3-5-sonnet-20241022",
+                    max_tokens=1000,
+                    temperature=0.7,
+                    messages=messages
+                )
+                return response.content[0].text
+        except Exception as e:
+            print(f"LLM chat failed: {e}")
+            return ""
+        
+        return ""
