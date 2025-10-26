@@ -1,9 +1,25 @@
-import { useState } from 'react';
-import { MessageCircle, Bot, Send, Clock, Sparkles } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { MessageCircle, Bot, Send, Clock, Sparkles, FileText, ExternalLink } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { useStore } from '@/store/useStore';
+import toast from 'react-hot-toast';
 
-type Message = { role: 'user' | 'assistant'; content: string; isAgentic?: boolean; researchId?: string };
+type Citation = {
+  document_id: string;
+  document_name: string;
+  page?: number;
+  text_snippet?: string;
+  relevance_score?: number;
+};
+
+type Message = { 
+  role: 'user' | 'assistant'; 
+  content: string; 
+  isAgentic?: boolean; 
+  researchId?: string;
+  citations?: (string | Citation)[];
+  source_documents?: Citation[];
+};
 
 // Simple markdown rendering function
 const renderMarkdown = (text: string) => {
@@ -70,6 +86,35 @@ export const ChatPanel = () => {
   const [agentMode, setAgentMode] = useState(false);
   const [currentResearch, setCurrentResearch] = useState<any>(null);
   const [isResearching, setIsResearching] = useState(false);
+
+  // Load chat history when project changes
+  useEffect(() => {
+    const loadChatHistory = async () => {
+      if (currentProject?.project_id) {
+        try {
+          const history = await apiService.getChatHistory(currentProject.project_id);
+          if (history.messages && history.messages.length > 0) {
+            const loadedMessages: Message[] = history.messages.map(msg => ({
+              role: msg.role,
+              content: msg.content,
+              citations: msg.citations,
+              source_documents: msg.metadata?.source_documents || [],
+              isAgentic: msg.is_agentic
+            }));
+            setMessages(loadedMessages);
+            console.log(`📚 Loaded ${loadedMessages.length} messages from history`);
+          }
+        } catch (error) {
+          console.error('Failed to load chat history:', error);
+        }
+      } else {
+        // Clear messages when no project is selected
+        setMessages([]);
+      }
+    };
+
+    loadChatHistory();
+  }, [currentProject?.project_id]);
 
   // Check if the query should trigger agentic research
   const checkIfShouldResearch = async (query: string) => {
@@ -174,9 +219,22 @@ export const ChatPanel = () => {
           // Still processing, poll again in 1 second for more frequent updates
           setTimeout(poll, 1000);
         }
-      } catch (error) {
+      } catch (error: any) {
         console.error('Failed to check research status:', error);
+        
+        // Check if this is an auth error
+        if (error.response?.status === 401 || error.response?.status === 403) {
+          console.warn('Auth token expired during research. Research continues on server.');
+          // Add a user-friendly message but don't stop polling entirely
+          setMessages(prev => [...prev, {
+            role: 'assistant' as const,
+            content: 'Your session may have expired, but your research is still running on the server. Please refresh the page to reconnect.',
+            isAgentic: true
+          }]);
+        }
+        
         setIsResearching(false);
+        setCurrentResearch(null);
       }
     };
     
@@ -237,7 +295,12 @@ export const ChatPanel = () => {
       // Regular chat if we have graph data
       if (filteredGraphData) {
         const res = await apiService.chat(input, filteredGraphData, nextHistory, currentProject?.project_id);
-        setMessages([...nextHistory, { role: 'assistant' as const, content: res.answer }]);
+        setMessages([...nextHistory, { 
+          role: 'assistant' as const, 
+          content: res.answer,
+          citations: res.citations || [],
+          source_documents: res.source_documents || []
+        }]);
 
         // Highlight relevant nodes and edges
         const nodeSet = new Set<string>(res.relevant_nodes || []);
@@ -284,7 +347,16 @@ export const ChatPanel = () => {
             
             {messages.length > 0 && (
               <button 
-                onClick={() => {
+                onClick={async () => {
+                  if (currentProject?.project_id) {
+                    try {
+                      await apiService.clearChatHistory(currentProject.project_id);
+                      toast.success('Chat history cleared');
+                    } catch (error) {
+                      console.error('Failed to clear history:', error);
+                      toast.error('Failed to clear history');
+                    }
+                  }
                   setMessages([]);
                   setHighlightedNodes(new Set());
                   setHighlightedLinks(new Set());
@@ -333,6 +405,64 @@ export const ChatPanel = () => {
               <div className="whitespace-pre-wrap break-words text-sm leading-relaxed">
                 {renderMarkdown(m.content)}
               </div>
+              
+              {/* Citations */}
+              {m.citations && m.citations.length > 0 && (
+                <div className="mt-3 pt-3 border-t border-gray-600/30 space-y-2">
+                  <div className="text-xs font-semibold text-gray-400 mb-2 flex items-center">
+                    <FileText className="w-3.5 h-3.5 mr-1.5" />
+                    Sources ({m.citations.length})
+                  </div>
+                  <div className="space-y-1.5">
+                    {m.citations.map((citation, idx) => {
+                      // Handle both string and object citations
+                      if (typeof citation === 'string') {
+                        return (
+                          <div key={idx} className="text-xs text-gray-400 bg-gray-900/40 rounded p-2 border border-gray-700/30">
+                            {citation}
+                          </div>
+                        );
+                      } else {
+                        return (
+                          <div key={idx} className="text-xs bg-gray-900/40 rounded-lg p-2.5 border border-gray-700/30 hover:border-blue-500/30 transition-colors group">
+                            <div className="flex items-start justify-between mb-1">
+                              <div className="font-medium text-blue-400 flex items-center space-x-1">
+                                <FileText className="w-3 h-3" />
+                                <span className="truncate max-w-[280px]" title={citation.document_name}>
+                                  {citation.document_name}
+                                </span>
+                              </div>
+                              {citation.page && (
+                                <span className="text-gray-500 text-xs ml-2">
+                                  p.{citation.page}
+                                </span>
+                              )}
+                            </div>
+                            {citation.text_snippet && (
+                              <div className="text-gray-400 italic line-clamp-2 mt-1">
+                                "{citation.text_snippet}"
+                              </div>
+                            )}
+                            {citation.relevance_score !== undefined && citation.relevance_score > 0 && (
+                              <div className="mt-1 flex items-center space-x-1">
+                                <div className="h-1 flex-1 bg-gray-700 rounded-full overflow-hidden">
+                                  <div 
+                                    className="h-full bg-blue-500 rounded-full transition-all"
+                                    style={{ width: `${Math.min(citation.relevance_score * 100, 100)}%` }}
+                                  ></div>
+                                </div>
+                                <span className="text-xs text-gray-500">
+                                  {Math.round(citation.relevance_score * 100)}%
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      }
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         ))}

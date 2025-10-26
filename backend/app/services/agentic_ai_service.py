@@ -42,7 +42,8 @@ class AgenticAIService:
         self,
         research_topic: str,
         max_papers: int = 10,
-        search_strategy: str = "comprehensive"
+        search_strategy: str = "comprehensive",
+        progress_callback = None
     ) -> Dict[str, Any]:
         """
         Perform autonomous research on a given topic
@@ -51,6 +52,7 @@ class AgenticAIService:
             research_topic: The topic to research
             max_papers: Maximum number of papers to analyze
             search_strategy: "comprehensive", "recent", or "high_impact"
+            progress_callback: Optional callback function for progress updates
             
         Returns:
             Dict with research results, insights, and recommendations
@@ -61,23 +63,47 @@ class AgenticAIService:
         search_queries = await self._generate_search_queries(research_topic, search_strategy)
         print(f"📝 Generated {len(search_queries)} search queries")
         
-        # Step 2: Search for papers
+        # Step 2: Search for papers with progress updates
         all_papers = []
-        for query in search_queries:
+        for i, query in enumerate(search_queries):
             papers = await self._search_papers(query, max_papers // len(search_queries))
             all_papers.extend(papers)
+            
+            # Update progress after each query
+            if progress_callback:
+                progress_callback({
+                    "papers_found": len(all_papers),
+                    "current_stage": f"Searching... ({i+1}/{len(search_queries)} queries complete)"
+                })
         
         # Remove duplicates and limit
         unique_papers = self._deduplicate_papers(all_papers)[:max_papers]
         print(f"📚 Found {len(unique_papers)} unique papers")
         
-        # Step 3: Analyze papers and build knowledge graph
-        analysis_results = await self._analyze_papers(unique_papers, research_topic)
+        # Final update for papers found
+        if progress_callback:
+            progress_callback({
+                "papers_found": len(unique_papers),
+                "current_stage": "Papers found - Starting analysis..."
+            })
+        
+        # Step 3: Analyze papers and build knowledge graph with progress updates
+        analysis_results = await self._analyze_papers(unique_papers, research_topic, progress_callback)
         
         # Step 4: Generate insights and hypotheses
+        if progress_callback:
+            progress_callback({
+                "current_stage": "Generating insights..."
+            })
+        
         insights = await self._generate_research_insights(analysis_results, research_topic)
         
         # Step 5: Find research gaps and recommendations
+        if progress_callback:
+            progress_callback({
+                "current_stage": "Finding research gaps..."
+            })
+        
         recommendations = await self._generate_recommendations(analysis_results, research_topic)
         
         return {
@@ -183,7 +209,8 @@ class AgenticAIService:
     async def _analyze_papers(
         self, 
         papers: List[Dict[str, Any]], 
-        research_topic: str
+        research_topic: str,
+        progress_callback = None
     ) -> Dict[str, Any]:
         """Analyze papers and build knowledge graph"""
         print(f"🔍 Analyzing {len(papers)} papers...")
@@ -194,6 +221,13 @@ class AgenticAIService:
         
         for i, paper in enumerate(papers):
             print(f"📄 Processing paper {i+1}/{len(papers)}: {paper.get('title', 'Unknown')[:50]}...")
+            
+            # Update progress for each paper analyzed
+            if progress_callback:
+                progress_callback({
+                    "papers_analyzed": i + 1,
+                    "current_stage": f"Analyzing paper {i+1}/{len(papers)}..."
+                })
             
             # Extract text content (abstract + title)
             text_content = f"{paper.get('title', '')} {paper.get('abstract', '')}"
@@ -228,9 +262,24 @@ class AgenticAIService:
             all_entities.update(unique_entities)
             all_relationships.extend(relationships)
             all_chunks.extend(chunks)
+            
+            # Update progress with entity and relationship counts
+            if progress_callback:
+                progress_callback({
+                    "entities_extracted": len(all_entities),
+                    "relationships_found": len(all_relationships)
+                })
         
         # Build knowledge graph
         graph_data = self.graph_builder.build_graph(all_entities, all_relationships)
+        
+        # Final update after graph building
+        if progress_callback:
+            progress_callback({
+                "entities_extracted": len(all_entities),
+                "relationships_found": len(all_relationships),
+                "current_stage": "Building knowledge graph..."
+            })
         
         # Index in RAG
         self.rag_service.index_document(

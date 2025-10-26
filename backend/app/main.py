@@ -1018,16 +1018,31 @@ async def chat_with_graph(
                     # Extract entities from user message (more robust matching)
                     user_entities = []
                     message_lower = message.lower()
+                    
+                    # First pass: match against known entities
                     for entity_name in entities.keys():
+                        entity_lower = entity_name.lower()
                         # Check for exact match, partial match, or word boundary match
-                        if (entity_name.lower() in message_lower or 
-                            any(word in message_lower for word in entity_name.lower().split()) or
-                            any(word in entity_name.lower() for word in message_lower.split())):
+                        if (entity_lower in message_lower or 
+                            message_lower in entity_lower or
+                            any(word in message_lower for word in entity_lower.split()) or
+                            any(word in entity_lower for word in message_lower.split())):
                             user_entities.append(entity_name)
+                    
+                    # Second pass: extract potential entity terms from query
+                    # Look for capitalized terms or hyphenated scientific terms
+                    import re
+                    potential_entities = re.findall(r'\b[A-Z][a-z]*(?:-[A-Za-z0-9]+)*\b|\bmiR-\d+\b', message)
+                    for term in potential_entities:
+                        # Check if this term is in any entity (case-insensitive)
+                        for entity_name in entities.keys():
+                            if term.lower() in entity_name.lower() and entity_name not in user_entities:
+                                user_entities.append(entity_name)
+                                break
                     
                     # Always retrieve context, even for general questions
                     print(f"🔍 User message: '{message}'")
-                    print(f"🔍 Found {len(user_entities)} matching entities: {user_entities[:5]}")
+                    print(f"🔍 Found {len(user_entities)} matching entities: {user_entities[:10]}")
                     
                     # Check if user is asking about a specific paper
                     target_doc_id = None
@@ -1047,8 +1062,9 @@ async def chat_with_graph(
                                 print(f"🎯 Targeting specific paper: {doc.get('name')} (ID: {target_doc_id})")
                                 break
                     
-                    # Use more entities for better context, or all if few entities
-                    context_entities = user_entities if user_entities else list(entities.keys())[:10]
+                    # Use more entities for better context
+                    # If we found entities, use them; otherwise use top entities or let RAG do full-text search
+                    context_entities = user_entities[:15] if user_entities else list(entities.keys())[:10]
                     
                     rag_context = rag_service.retrieve_context_for_query(
                         query=message,
@@ -1075,29 +1091,94 @@ async def chat_with_graph(
                 )
                 
                 print(f"🤖 Using RAG-enhanced prompt with {len(rag_context.get('chunks', []))} chunks")
+                print(f"📝 RAG Prompt preview (first 500 chars):\n{rag_prompt[:500]}...")
                 
                 # Use the RAG-enhanced prompt directly with LLM
                 llm_response = await llm_service.chat([{"role": "user", "content": rag_prompt}])
+                
+                print(f"💬 LLM Response preview (first 300 chars):\n{llm_response[:300]}...")
                 
                 # Create result in expected format
                 result = {
                     "answer": llm_response,
                     "relevant_nodes": list(entities.keys())[:5],  # Top entities as relevant nodes
-                    "citations": []
+                    "citations": [],
+                    "source_documents": []
                 }
                 
                 # Enhance answer with RAG citations if available
                 if rag_context.get("chunks"):
-                    citations = [f"{chunk.get('doc_id', 'unknown')} (page {chunk.get('page', '?')})" 
-                               for chunk in rag_context["chunks"][:3]]
-                    result["citations"] = citations
+                    # Build detailed citations with document info
+                    # Create doc_id to name mapping
+                    doc_id_to_name = {doc['id']: doc['name'] for doc in documents}
+                    
+                    for chunk in rag_context["chunks"][:5]:  # Top 5 citations
+                        doc_id = chunk.get('doc_id', 'unknown')
+                        doc_name = doc_id_to_name.get(doc_id, f"Document {doc_id[:8]}...")
+                        page = chunk.get('page', None)
+                        text = chunk.get('text', '')[:200] + "..." if len(chunk.get('text', '')) > 200 else chunk.get('text', '')
+                        
+                        # Add to citations list
+                        citation = {
+                            "document_id": doc_id,
+                            "document_name": doc_name,
+                            "page": page,
+                            "text_snippet": text,
+                            "relevance_score": chunk.get('relevance_score', chunk.get('score', 0.0))
+                        }
+                        result["citations"].append(citation)
+                        result["source_documents"].append(citation)
+                    
+                    print(f"✓ Added {len(result['citations'])} detailed citations")
             except Exception as e:
                 print(f"RAG-enhanced chat failed: {e}")
+                import traceback
+                traceback.print_exc()
                 # Fallback to regular chat
                 result = await agent.chat(message, conversation_history)
         else:
             # Use LLM-powered chat if available, otherwise fallback to pattern matching
             result = await agent.chat(message, conversation_history)
+        
+        # Save chat messages to database if project_id is provided
+        if project_id:
+            try:
+                from app.models.database import ChatMessage
+                db = SessionLocal()
+                try:
+                    # Save user message
+                    user_msg = ChatMessage(
+                        project_id=project_id,
+                        role="user",
+                        content=message,
+                        citations=[],
+                        relevant_nodes=[],
+                        is_agentic=0,
+                        extra_data={}
+                    )
+                    db.add(user_msg)
+                    
+                    # Save assistant message
+                    assistant_msg = ChatMessage(
+                        project_id=project_id,
+                        role="assistant",
+                        content=result.get("answer", ""),
+                        citations=result.get("citations", []),
+                        relevant_nodes=result.get("relevant_nodes", []),
+                        is_agentic=0,
+                        extra_data={
+                            "relevant_edges": result.get("relevant_edges", []),
+                            "tool_calls": result.get("tool_calls", []),
+                            "source_documents": result.get("source_documents", [])
+                        }
+                    )
+                    db.add(assistant_msg)
+                    db.commit()
+                    print(f"💾 Saved chat exchange to project {project_id}")
+                finally:
+                    db.close()
+            except Exception as e:
+                print(f"⚠️  Failed to save chat history: {e}")
         
         return ChatResponse(
             answer=result.get("answer", ""),
@@ -1105,9 +1186,145 @@ async def chat_with_graph(
             relevant_nodes=result.get("relevant_nodes", []),
             relevant_edges=result.get("relevant_edges", []),
             tool_calls=result.get("tool_calls", []),
+            source_documents=result.get("source_documents", []),
         )
     except Exception as e:
         print(f"Chat error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/projects/{project_id}/chat-history")
+async def get_chat_history(
+    project_id: str,
+    limit: int = 50,
+    current_user: User = Depends(get_current_user)
+):
+    """Get chat history for a project"""
+    try:
+        from app.models.database import ChatMessage
+        db = SessionLocal()
+        try:
+            messages = db.query(ChatMessage)\
+                .filter(ChatMessage.project_id == project_id)\
+                .order_by(ChatMessage.created_at.desc())\
+                .limit(limit)\
+                .all()
+            
+            # Reverse to get chronological order
+            messages = list(reversed(messages))
+            
+            return {
+                "messages": [
+                    {
+                        "id": msg.id,
+                        "role": msg.role,
+                        "content": msg.content,
+                        "citations": msg.citations or [],
+                        "relevant_nodes": msg.relevant_nodes or [],
+                        "is_agentic": bool(msg.is_agentic),
+                        "created_at": msg.created_at.isoformat(),
+                        "extra_data": msg.extra_data or {}
+                    }
+                    for msg in messages
+                ]
+            }
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"Error fetching chat history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/projects/{project_id}/chat-history")
+async def clear_chat_history(
+    project_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Clear chat history for a project"""
+    try:
+        from app.models.database import ChatMessage
+        db = SessionLocal()
+        try:
+            deleted = db.query(ChatMessage)\
+                .filter(ChatMessage.project_id == project_id)\
+                .delete()
+            db.commit()
+            
+            return {
+                "status": "success",
+                "messages_deleted": deleted
+            }
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"Error clearing chat history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/projects/{project_id}/hypotheses")
+async def get_project_hypotheses(
+    project_id: str,
+    limit: int = 50,
+    current_user: User = Depends(get_current_user)
+):
+    """Get saved hypotheses for a project"""
+    try:
+        from app.models.database import Hypothesis as HypothesisModel
+        db = SessionLocal()
+        try:
+            hypotheses = db.query(HypothesisModel)\
+                .filter(HypothesisModel.project_id == project_id)\
+                .order_by(HypothesisModel.created_at.desc())\
+                .limit(limit)\
+                .all()
+            
+            return {
+                "hypotheses": [
+                    {
+                        "id": hyp.id,
+                        "title": hyp.title,
+                        "explanation": hyp.explanation,
+                        "entities": hyp.entities or [],
+                        "evidence_sentences": hyp.evidence_sentences or [],
+                        "edge_pairs": hyp.edge_pairs or [],
+                        "confidence": hyp.confidence,
+                        "focus_entity": hyp.focus_entity,
+                        "created_at": hyp.created_at.isoformat(),
+                        "extra_data": hyp.extra_data or {}
+                    }
+                    for hyp in hypotheses
+                ]
+            }
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"Error fetching hypotheses: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/projects/{project_id}/hypotheses")
+async def clear_project_hypotheses(
+    project_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Clear saved hypotheses for a project"""
+    try:
+        from app.models.database import Hypothesis as HypothesisModel
+        db = SessionLocal()
+        try:
+            deleted = db.query(HypothesisModel)\
+                .filter(HypothesisModel.project_id == project_id)\
+                .delete()
+            db.commit()
+            
+            return {
+                "status": "success",
+                "hypotheses_deleted": deleted
+            }
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"Error clearing hypotheses: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1265,6 +1482,32 @@ async def generate_hypotheses(
                 "confidence": _parse_confidence(insight.get("confidence", 0.5)),
                 "type": insight.get("type", "insight")
             })
+
+        # Save hypotheses to database if project_id is provided
+        if project_id and normalized:
+            try:
+                from app.models.database import Hypothesis as HypothesisModel
+                db = SessionLocal()
+                try:
+                    for hyp in normalized:
+                        hypothesis_record = HypothesisModel(
+                            project_id=project_id,
+                            title=hyp["title"],
+                            explanation=hyp["explanation"],
+                            entities=hyp["entities"],
+                            evidence_sentences=hyp["evidence_sentences"],
+                            edge_pairs=hyp["edge_pairs"],
+                            confidence=hyp["confidence"],
+                            focus_entity=focus_entity or "",
+                            extra_data={"type": hyp.get("type", "insight")}
+                        )
+                        db.add(hypothesis_record)
+                    db.commit()
+                    print(f"💾 Saved {len(normalized)} hypotheses to project {project_id}")
+                finally:
+                    db.close()
+            except Exception as e:
+                print(f"⚠️  Failed to save hypotheses: {e}")
 
         return HypothesesResponse(hypotheses=normalized)
     except Exception as e:
@@ -1844,9 +2087,9 @@ async def start_agentic_research(
 @app.get("/api/agentic/research/{research_id}/status")
 async def get_agentic_research_status(
     research_id: str,
-    current_user: User = Depends(get_current_user)
+    current_user: Optional[User] = Depends(get_current_user_optional)
 ):
-    """Get the status of agentic research"""
+    """Get the status of agentic research (optional auth for long-running operations)"""
     try:
         if research_id not in agentic_research_jobs:
             raise HTTPException(status_code=404, detail="Research job not found")
@@ -1875,9 +2118,9 @@ async def get_agentic_research_status(
 @app.get("/api/agentic/research/{research_id}/results")
 async def get_agentic_research_results(
     research_id: str,
-    current_user: User = Depends(get_current_user)
+    current_user: Optional[User] = Depends(get_current_user_optional)
 ):
-    """Get the results of completed agentic research"""
+    """Get the results of completed agentic research (optional auth for long-running operations)"""
     try:
         if research_id not in agentic_research_jobs:
             raise HTTPException(status_code=404, detail="Research job not found")
@@ -2254,8 +2497,10 @@ async def process_agentic_research(
     try:
         # Update status - Step 1: Searching
         agentic_research_jobs[research_id]["status"] = "searching"
-        agentic_research_jobs[research_id]["current_stage"] = "Searching for papers"
+        agentic_research_jobs[research_id]["current_stage"] = "Searching PubMed and Google Scholar for papers"
         print(f"🔍 Step 1: Searching for papers on '{research_topic}'...")
+        print(f"   - Searching PubMed database")
+        print(f"   - Enriching with Google Scholar PDF links")
         
         # Initialize services
         llm_service = LLMService()
@@ -2265,31 +2510,34 @@ async def process_agentic_research(
         agentic_research_jobs[research_id]["progress"]["papers_found"] = 0
         agentic_research_jobs[research_id]["progress"]["papers_analyzed"] = 0
         
+        # Define progress callback to update job status in real-time
+        def progress_callback(updates: dict):
+            """Update progress in real-time"""
+            for key, value in updates.items():
+                if key == "current_stage":
+                    agentic_research_jobs[research_id]["current_stage"] = value
+                    print(f"📊 Stage: {value}")
+                elif key in ["papers_found", "papers_analyzed", "entities_extracted", "relationships_found"]:
+                    agentic_research_jobs[research_id]["progress"][key] = value
+                    print(f"📈 Progress: {key}={value}")
+        
         # Perform research with progress updates
         print(f"📚 Finding papers...")
         results = await agentic_ai.autonomous_research(
             research_topic=research_topic,
             max_papers=max_papers,
-            search_strategy=search_strategy
+            search_strategy=search_strategy,
+            progress_callback=progress_callback
         )
         
         papers_found = len(results.get("papers", []))
         papers_analyzed = results.get("papers_analyzed", papers_found)
         
-        # Update progress IMMEDIATELY after search completes with actual values
-        print(f"✅ Search phase complete: {papers_found} papers found")
+        # Final update after research completes
+        print(f"✅ Research complete: {papers_found} papers found and analyzed")
         agentic_research_jobs[research_id]["progress"]["papers_found"] = papers_found
         agentic_research_jobs[research_id]["progress"]["papers_analyzed"] = papers_analyzed
-        agentic_research_jobs[research_id]["current_stage"] = f"Found {papers_found} papers - Processing..."
         agentic_research_jobs[research_id]["status"] = "analyzing"
-        
-        # Small delay to let frontend see the papers_found update
-        await asyncio.sleep(0.3)
-        
-        # Update status - Step 2: Extracting
-        agentic_research_jobs[research_id]["status"] = "extracting"
-        agentic_research_jobs[research_id]["current_stage"] = "Extracting entities and relationships"
-        print(f"🧬 Step 2: Extracting entities and relationships...")
         
         # Update progress - entities extracted
         knowledge_graph = results.get("knowledge_graph")
@@ -2301,20 +2549,15 @@ async def process_agentic_research(
         agentic_research_jobs[research_id]["current_stage"] = f"Extracted {entities_found} entities, {relationships_found} relationships"
         print(f"✅ Extracted {entities_found} entities and {relationships_found} relationships")
         
-        # Small delay to let frontend see the entities update
-        await asyncio.sleep(0.3)
-        
-        # Update status - Step 3: Building graph
+        # Update status - Building graph
         agentic_research_jobs[research_id]["status"] = "building"
         agentic_research_jobs[research_id]["current_stage"] = "Building knowledge graph"
-        print(f"📊 Step 3: Building knowledge graph with {entities_found} entities...")
+        print(f"📊 Building knowledge graph with {entities_found} entities...")
         
-        # Update status - Step 4: Saving
-
-
+        # Update status - Saving
         agentic_research_jobs[research_id]["status"] = "saving"
         agentic_research_jobs[research_id]["current_stage"] = "Saving to project"
-        print(f"💾 Step 5: Saving research to project...")
+        print(f"💾 Saving research to project...")
         
         # Save results
         agentic_research_jobs[research_id]["results"] = results

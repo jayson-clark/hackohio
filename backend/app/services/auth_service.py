@@ -6,7 +6,8 @@ from app.models.database import get_db, User
 from datetime import datetime
 from typing import Optional
 
-security = HTTPBearer()
+# Make security optional by setting auto_error=False
+security = HTTPBearer(auto_error=False)
 
 class AuthService:
     """Service for handling Google OAuth authentication"""
@@ -54,10 +55,17 @@ class AuthService:
         return user
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: Session = Depends(get_db)
 ) -> User:
     """Dependency to get current authenticated user"""
+    if not credentials:
+        raise HTTPException(
+            status_code=401,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
     token = credentials.credentials
     
     # Verify token with Google

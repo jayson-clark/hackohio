@@ -83,6 +83,42 @@ class PDFGraphEdge(Base):
     document = relationship("Document", back_populates="pdf_edges")
 
 
+class ChatMessage(Base):
+    """Chat messages and insights for each project"""
+    __tablename__ = "chat_messages"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    project_id = Column(String, ForeignKey("projects.id"), nullable=False)
+    role = Column(String, nullable=False)  # 'user' or 'assistant'
+    content = Column(Text, nullable=False)
+    citations = Column(JSON, default=list)  # List of citation objects
+    relevant_nodes = Column(JSON, default=list)  # List of node IDs
+    is_agentic = Column(Integer, default=0)  # 0=regular chat, 1=agentic research
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Optional metadata (renamed from 'metadata' which is reserved)
+    extra_data = Column(JSON, default=dict)  # For storing additional context
+
+
+class Hypothesis(Base):
+    """Generated hypotheses and insights for each project"""
+    __tablename__ = "hypotheses"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    project_id = Column(String, ForeignKey("projects.id"), nullable=False)
+    title = Column(String, nullable=False)
+    explanation = Column(Text, nullable=False)
+    entities = Column(JSON, default=list)  # List of entity names
+    evidence_sentences = Column(JSON, default=list)  # Supporting evidence
+    edge_pairs = Column(JSON, default=list)  # Supporting edges [[a,b], [b,c]]
+    confidence = Column(Float, default=0.5)
+    focus_entity = Column(String, default="")  # Entity this hypothesis focuses on
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Additional metadata
+    extra_data = Column(JSON, default=dict)
+
+
 def init_db():
     """Initialize database tables"""
     Base.metadata.create_all(bind=engine)

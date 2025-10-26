@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { BarChart3, Plus, X, Sparkles } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { BarChart3, Plus, X, Sparkles, Trash2 } from 'lucide-react';
 import { useStore } from '@/store/useStore';
 import { apiService } from '@/services/api';
 import toast from 'react-hot-toast';
@@ -12,17 +12,41 @@ export function HypothesisBar() {
   const [loadingHyp, setLoadingHyp] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
 
+  // Load saved hypotheses when project changes
+  useEffect(() => {
+    if (currentProject?.project_id) {
+      loadSavedHypotheses();
+    } else {
+      setHypotheses([]);
+    }
+  }, [currentProject?.project_id]);
+
+  const loadSavedHypotheses = async () => {
+    if (!currentProject?.project_id) return;
+    try {
+      const res = await apiService.getProjectHypotheses(currentProject.project_id, 50);
+      if (res.hypotheses && res.hypotheses.length > 0) {
+        setHypotheses(res.hypotheses);
+        // Auto-expand if we have saved hypotheses
+        setIsExpanded(true);
+      }
+    } catch (e) {
+      console.error('Failed to load saved hypotheses:', e);
+    }
+  };
+
   const fetchHypotheses = async () => {
     if (!filteredGraphData) return;
     setLoadingHyp(true);
     try {
-      const res = await apiService.generateHypotheses(
+      await apiService.generateHypotheses(
         filteredGraphData,
         undefined,
         10,
         currentProject?.project_id
       );
-      setHypotheses(res.hypotheses || []);
+      // Reload saved hypotheses to show both new and old
+      await loadSavedHypotheses();
       setIsExpanded(true);
       toast.success('Hypotheses generated!');
     } catch (e) {
@@ -47,6 +71,18 @@ export function HypothesisBar() {
     useStore.getState().setHighlightedNodes(nodes);
     useStore.getState().setHighlightedLinks(links);
     toast.success('Hypothesis highlighted!');
+  };
+
+  const clearHypotheses = async () => {
+    if (!currentProject?.project_id) return;
+    try {
+      await apiService.clearProjectHypotheses(currentProject.project_id);
+      setHypotheses([]);
+      setIsExpanded(false);
+      toast.success('Hypotheses cleared');
+    } catch (e) {
+      toast.error('Failed to clear hypotheses');
+    }
   };
 
   return (
@@ -101,16 +137,25 @@ export function HypothesisBar() {
                 )}
               </button>
               {hypotheses.length > 0 && (
-                <button
-                  onClick={() => setIsExpanded(!isExpanded)}
-                  className="p-2 hover:bg-white/10 rounded-lg transition-colors"
-                >
-                  {isExpanded ? (
-                    <X className="w-5 h-5 text-white" />
-                  ) : (
-                    <BarChart3 className="w-5 h-5 text-white" />
-                  )}
-                </button>
+                <>
+                  <button
+                    onClick={clearHypotheses}
+                    className="p-2 hover:bg-red-500/20 rounded-lg transition-colors group"
+                    title="Clear all hypotheses"
+                  >
+                    <Trash2 className="w-5 h-5 text-gray-400 group-hover:text-red-400" />
+                  </button>
+                  <button
+                    onClick={() => setIsExpanded(!isExpanded)}
+                    className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+                  >
+                    {isExpanded ? (
+                      <X className="w-5 h-5 text-white" />
+                    ) : (
+                      <BarChart3 className="w-5 h-5 text-white" />
+                    )}
+                  </button>
+                </>
               )}
             </div>
           </div>

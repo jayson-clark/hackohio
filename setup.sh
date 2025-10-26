@@ -40,7 +40,7 @@ pip install -r requirements.txt
 # Download scispaCy model
 echo "Downloading scispaCy model (this may take a few minutes)..."
 echo "Note: This downloads ~1.5GB model from S3..."
-pip install https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_core_sci_lg-0.5.4.tar.gz
+pip install https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_bionlp13cg_md-0.5.4.tar.gz
 
 # Create .env if it doesn't exist
 if [ ! -f ".env" ]; then

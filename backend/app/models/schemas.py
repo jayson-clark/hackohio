@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Union
 from enum import Enum
 
 
@@ -96,12 +96,21 @@ class ChatRequest(BaseModel):
     conversation_history: List[ChatMessage] = []
 
 
+class Citation(BaseModel):
+    document_id: str
+    document_name: str
+    page: Optional[int] = None
+    text_snippet: Optional[str] = None
+    relevance_score: Optional[float] = None
+
+
 class ChatResponse(BaseModel):
     answer: str
-    citations: List[str] = []
+    citations: List[Union[str, Citation]] = []  # Support both old and new format
     relevant_nodes: List[str] = []
     relevant_edges: List[List[str]] = []  # [[source, target], ...]
     tool_calls: List[str] = []
+    source_documents: List[dict] = []  # Full document metadata
 
 
 # ==== Hypothesis Generation Schemas ====

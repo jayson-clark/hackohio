@@ -49,12 +49,16 @@ class RAGService:
         self.document_chunks[doc_id] = text_chunks
         
         # Link entities to chunks
+        entities_indexed = 0
         for chunk in text_chunks:
             chunk_id = chunk.get("chunk_id")
             chunk_entities = chunk.get("entities", [])
             
             for entity in chunk_entities:
                 self.entity_to_chunks[entity].append(chunk_id)
+                entities_indexed += 1
+        
+        print(f"   → RAG: Indexed {len(text_chunks)} chunks with {entities_indexed} entity mentions ({len(self.entity_to_chunks)} unique entities)")
         
         # TODO: Generate embeddings if LLM service is available
         # This would use Anthropic embeddings or similar
@@ -77,6 +81,7 @@ class RAGService:
         1. Entity-based retrieval (if entities provided)
         2. Semantic search (if embeddings available)
         3. Graph-based expansion (if graph available)
+        4. Fallback to full-text search in chunks
         
         Returns:
             {
@@ -90,34 +95,56 @@ class RAGService:
         relevant_entities = set(entities or [])
         relevant_relationships = []
         
-        # 1. Entity-based retrieval
+        # 1. Entity-based retrieval with fuzzy matching
         if entities:
             chunk_scores = defaultdict(float)
             
+            # Create case-insensitive entity mapping
+            entity_map = {}
+            for indexed_entity in self.entity_to_chunks.keys():
+                entity_map[indexed_entity.lower()] = indexed_entity
+            
             for entity in entities:
-                # Get chunks mentioning this entity
-                chunk_ids = self.entity_to_chunks.get(entity, [])
-                for chunk_id in chunk_ids:
-                    chunk_scores[chunk_id] += 1.0
+                entity_lower = entity.lower()
                 
-                # If graph available, expand to related entities
-                if self.graph and entity in self.graph.nodes():
-                    neighbors = list(self.graph.neighbors(entity))
-                    relevant_entities.update(neighbors[:5])  # Add top 5 neighbors
+                # Try exact match first (case-insensitive)
+                matched_entity = entity_map.get(entity_lower)
+                
+                # If no exact match, try partial matching
+                if not matched_entity:
+                    for indexed_entity_lower, indexed_entity in entity_map.items():
+                        if entity_lower in indexed_entity_lower or indexed_entity_lower in entity_lower:
+                            matched_entity = indexed_entity
+                            print(f"   Fuzzy matched: '{entity}' -> '{matched_entity}'")
+                            break
+                
+                if matched_entity:
+                    # Get chunks mentioning this entity
+                    chunk_ids = self.entity_to_chunks.get(matched_entity, [])
+                    print(f"   Found {len(chunk_ids)} chunks for entity '{matched_entity}'")
+                    for chunk_id in chunk_ids:
+                        chunk_scores[chunk_id] += 1.0
                     
-                    # Get relationships
-                    for neighbor in neighbors[:3]:
-                        edge_data = self.graph.get_edge_data(entity, neighbor, {})
-                        relevant_relationships.append({
-                            "source": entity,
-                            "target": neighbor,
-                            "type": edge_data.get("relationship_type", "RELATED"),
-                            "weight": edge_data.get("weight", 1.0),
-                            "evidence": edge_data.get("evidence", "")
-                        })
+                    # If graph available, expand to related entities
+                    if self.graph and matched_entity in self.graph.nodes():
+                        neighbors = list(self.graph.neighbors(matched_entity))
+                        relevant_entities.update(neighbors[:5])  # Add top 5 neighbors
+                        
+                        # Get relationships
+                        for neighbor in neighbors[:3]:
+                            edge_data = self.graph.get_edge_data(matched_entity, neighbor, {})
+                            relevant_relationships.append({
+                                "source": matched_entity,
+                                "target": neighbor,
+                                "type": edge_data.get("relationship_type", "RELATED"),
+                                "weight": edge_data.get("weight", 1.0),
+                                "evidence": edge_data.get("evidence", "")
+                            })
+                else:
+                    print(f"   No match found for entity '{entity}' in indexed entities")
             
             # Get top chunks by score
-            top_chunk_ids = sorted(chunk_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
+            top_chunk_ids = sorted(chunk_scores.items(), key=lambda x: x[1], reverse=True)[:top_k * 2]
             
             for chunk_id, score in top_chunk_ids:
                 # Find the chunk in document_chunks
@@ -135,7 +162,33 @@ class RAGService:
                             })
                             break
         
-        # 2. Graph context summary
+        # 2. Fallback: If no chunks found through entities, do full-text search
+        if not relevant_chunks:
+            print(f"   ⚠️  No entity-based chunks found, falling back to full-text search")
+            query_lower = query.lower()
+            query_terms = query_lower.split()
+            
+            for doc_id, chunks in self.document_chunks.items():
+                # Filter by target document if specified
+                if target_doc_id and doc_id != target_doc_id:
+                    continue
+                    
+                for chunk in chunks:
+                    text = chunk.get("text", "").lower()
+                    # Score based on term matches
+                    score = sum(1 for term in query_terms if term in text)
+                    if score > 0:
+                        relevant_chunks.append({
+                            **chunk,
+                            "relevance_score": score,
+                            "doc_id": doc_id
+                        })
+            
+            # Sort by relevance
+            relevant_chunks = sorted(relevant_chunks, key=lambda x: x.get("relevance_score", 0), reverse=True)[:top_k]
+            print(f"   ✓ Full-text search found {len(relevant_chunks)} chunks")
+        
+        # 3. Graph context summary
         graph_context = ""
         if include_graph_context and self.graph and entities:
             graph_context = self._build_graph_context_summary(list(relevant_entities))

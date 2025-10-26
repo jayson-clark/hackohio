@@ -29,11 +29,22 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401 || error.response?.status === 403) {
-      // Token expired, invalid, or not authenticated, clear auth data
-      localStorage.removeItem('auth_token');
-      localStorage.removeItem('user_data');
-      // Optionally redirect to login or trigger re-authentication
-      window.location.reload();
+      // Check if this is a polling request (agentic research status checks)
+      // Don't force logout on these, as the token might just need refresh
+      const url = error.config?.url || '';
+      const isPollingRequest = url.includes('/agentic/research/') && url.includes('/status');
+      
+      if (!isPollingRequest) {
+        // Token expired, invalid, or not authenticated, clear auth data
+        console.warn('Authentication failed, clearing token');
+        localStorage.removeItem('auth_token');
+        localStorage.removeItem('user_data');
+        // Redirect to login
+        window.location.reload();
+      } else {
+        // For polling requests, just log the error but don't force logout
+        console.warn('Auth token may have expired during long-running operation. Please refresh if needed.');
+      }
     }
     return Promise.reject(error);
   }
@@ -120,10 +131,23 @@ export const apiService = {
     });
     return response.data as {
       answer: string;
-      citations: string[];
+      citations: Array<string | {
+        document_id: string;
+        document_name: string;
+        page?: number;
+        text_snippet?: string;
+        relevance_score?: number;
+      }>;
       relevant_nodes: string[];
       relevant_edges: [string, string][];
       tool_calls: string[];
+      source_documents?: Array<{
+        document_id: string;
+        document_name: string;
+        page?: number;
+        text_snippet?: string;
+        relevance_score?: number;
+      }>;
     };
   },
 
@@ -392,6 +416,66 @@ export const apiService = {
     const response = await api.post(`/api/agentic/research/${researchId}/save`, {
       project_name: projectName
     });
+    return response.data;
+  },
+
+  /**
+   * Chat History Methods
+   */
+  async getChatHistory(projectId: string, limit: number = 50): Promise<{
+    messages: Array<{
+      id: number;
+      role: 'user' | 'assistant';
+      content: string;
+      citations: any[];
+      relevant_nodes: string[];
+      is_agentic: boolean;
+      created_at: string;
+      metadata: any;
+    }>;
+  }> {
+    const response = await api.get(`/api/projects/${projectId}/chat-history`, {
+      params: { limit }
+    });
+    return response.data;
+  },
+
+  async clearChatHistory(projectId: string): Promise<{
+    status: string;
+    messages_deleted: number;
+  }> {
+    const response = await api.delete(`/api/projects/${projectId}/chat-history`);
+    return response.data;
+  },
+
+  /**
+   * Hypothesis History Methods
+   */
+  async getProjectHypotheses(projectId: string, limit: number = 50): Promise<{
+    hypotheses: Array<{
+      id: number;
+      title: string;
+      explanation: string;
+      entities: string[];
+      evidence_sentences: string[];
+      edge_pairs: Array<[string, string]>;
+      confidence: number;
+      focus_entity: string | null;
+      created_at: string;
+      extra_data: any;
+    }>;
+  }> {
+    const response = await api.get(`/api/projects/${projectId}/hypotheses`, {
+      params: { limit }
+    });
+    return response.data;
+  },
+
+  async clearProjectHypotheses(projectId: string): Promise<{
+    status: string;
+    hypotheses_deleted: number;
+  }> {
+    const response = await api.delete(`/api/projects/${projectId}/hypotheses`);
     return response.data;
   },
 };
