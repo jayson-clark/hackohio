@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     # LLM API Keys (Anthropic only)
     anthropic_api_key: str = ""
     
+    # LAVA API Configuration
+    lava_secret_key: str = ""
+    lava_connection_secret: str = ""
+    lava_product_secret: str = ""
+    enable_lava: bool = False
     
     # Processing Configuration
     max_upload_size_mb: int = 100

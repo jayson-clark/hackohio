@@ -58,6 +58,12 @@ DATABASE_URL=sqlite:///./synapse_mapper.db
 OPENAI_API_KEY=
 ANTHROPIC_API_KEY=
 
+# LAVA API Configuration
+LAVA_SECRET_KEY=aks_live_m3wV8b44f9_BaljpU1ujJEj3Q5lReJRQBjcuS50ogLPu7OstaqAy1SP
+LAVA_CONNECTION_SECRET=cons_live_kLJ-brEFgIll0qeBvKXSqGN-k6rgWcss9mmAyNxSH-rmilCjuOcTKZ
+LAVA_PRODUCT_SECRET=ps_live_HXcIGt5s3lG8BnYYqhqXlFV5BhWHLQI0r7U6Vac5E37m69GA5znZHXLS
+ENABLE_LAVA=true
+
 # Processing Configuration
 MAX_UPLOAD_SIZE_MB=100
 MAX_CONCURRENT_PROCESSING=4
@@ -82,7 +88,10 @@ npm install
 # Create .env if it doesn't exist
 if [ ! -f ".env" ]; then
     echo "Creating .env file..."
-    echo "VITE_API_URL=http://localhost:8000" > .env
+    cat > .env << EOF
+VITE_API_URL=http://localhost:8000
+VITE_GOOGLE_CLIENT_ID=865286496790-ftmfmsu2uq8t1d4vf11fh44cp5v5u94i.apps.googleusercontent.com
+EOF
 fi
 
 echo "✓ Frontend setup complete!"
