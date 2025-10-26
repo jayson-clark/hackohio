@@ -25,7 +25,7 @@ pip install -r requirements.txt
 ### 2. Download scispaCy Model
 
 ```bash
-pip install https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_core_sci_lg-0.5.4.tar.gz
+pip install https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_bionlp13cg_md-0.5.4.tar.gz
 ```
 
 ### 3. Configure Environment

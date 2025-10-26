@@ -91,7 +91,7 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
 # Download scispaCy model (this may take a few minutes)
-pip install https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_core_sci_lg-0.5.4.tar.gz
+pip install https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_bionlp13cg_md-0.5.4.tar.gz
 
 # Configure Lava Payments (required for AI features)
 cat > .env << EOF
@@ -164,7 +164,7 @@ Navigate to `http://localhost:5173` and start uploading PDFs!
 ### Backend
 - **FastAPI** - Modern async API framework
 - **PyMuPDF** - High-performance PDF processing
-- **scispaCy** - Biomedical NER (en_core_sci_lg model)
+- **scispaCy** - Biomedical NER (en_ner_bionlp13cg_md model)
 - **NetworkX** - Graph algorithms and analysis
 - **sentence-transformers** - RAG embeddings
 - **python-louvain** - Community detection
@@ -306,7 +306,7 @@ calhacks/
 
 **scispaCy model not found:**
 ```bash
-pip install https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_core_sci_lg-0.5.4.tar.gz
+pip install https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_bionlp13cg_md-0.5.4.tar.gz
 ```
 
 **CORS errors:**

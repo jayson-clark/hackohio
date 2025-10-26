@@ -7,14 +7,14 @@ import re
 class NERService:
     """Named Entity Recognition for biomedical text using scispaCy"""
     
-    def __init__(self, model_name: str = "en_core_sci_lg"):
+    def __init__(self, model_name: str = "en_ner_bionlp13cg_md"):
         """Initialize the NER model"""
         try:
             self.nlp = spacy.load(model_name)
         except OSError:
             raise Exception(
                 f"Model '{model_name}' not found. Please install it:\n"
-                f"pip install https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_core_sci_lg-0.5.4.tar.gz"
+                f"pip install https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_bionlp13cg_md-0.5.4.tar.gz"
             )
         
         # Entity type mappings
