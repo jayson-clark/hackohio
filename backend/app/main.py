@@ -74,9 +74,16 @@ from app.models import (
     get_db,
     Project,
     Document,
+    PDFGraphNode,
+    PDFGraphEdge,
     SessionLocal,
 )
 from app.services.auth_service import get_current_user, get_current_user_optional
+from app.services.llm_service import LLMService
+from app.services.rag_service import RAGService
+from app.services.document_chunker import DocumentChunker
+from app.services.ner_service import NERService
+from app.services.relationship_extractor import RelationshipExtractor
 from app.models.database import User
 from app.services import (
     PDFProcessor,
@@ -90,6 +97,7 @@ from app.services import (
     DocumentChunker,
     PubMedService,
     ClinicalTrialsService,
+    AgenticAIService,
 )
 from sqlalchemy.orm import Session
 from app.models import (
@@ -1772,6 +1780,807 @@ async def discover_trials(req: TrialDiscoveryRequest):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==== Agentic AI Endpoints ====
+
+# Storage for agentic research jobs
+agentic_research_jobs = {}
+
+@app.post("/api/agentic/research")
+async def start_agentic_research(
+    request: dict,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user)
+):
+    """Start autonomous research on a topic"""
+    try:
+        research_topic = request.get("research_topic", "")
+        max_papers = int(request.get("max_papers", 10))
+        search_strategy = request.get("search_strategy", "comprehensive")
+        project_id = request.get("project_id")
+        
+        if not research_topic:
+            raise HTTPException(status_code=400, detail="Research topic is required")
+        
+        # Generate unique research ID
+        research_id = str(uuid.uuid4())
+        
+        # Initialize job status
+        agentic_research_jobs[research_id] = {
+            "status": "starting",
+            "progress": {
+                "papers_found": 0,
+                "papers_analyzed": 0,
+                "entities_extracted": 0,
+                "relationships_found": 0
+            },
+            "results": None,
+            "error": None,
+            "started_at": datetime.now().isoformat()
+        }
+        
+        # Start background research
+        background_tasks.add_task(
+            process_agentic_research,
+            research_id,
+            research_topic,
+            max_papers,
+            search_strategy,
+            project_id
+        )
+        
+        return {
+            "research_id": research_id,
+            "status": "started",
+            "message": f"Research started on: {research_topic}"
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/agentic/research/{research_id}/status")
+async def get_agentic_research_status(
+    research_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Get the status of agentic research"""
+    try:
+        if research_id not in agentic_research_jobs:
+            raise HTTPException(status_code=404, detail="Research job not found")
+        
+        job = agentic_research_jobs[research_id]
+        return {
+            "research_id": research_id,
+            "status": job["status"],
+            "progress": job["progress"],
+            "started_at": job["started_at"],
+            "error": job.get("error")
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/agentic/research/{research_id}/results")
+async def get_agentic_research_results(
+    research_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Get the results of completed agentic research"""
+    try:
+        if research_id not in agentic_research_jobs:
+            raise HTTPException(status_code=404, detail="Research job not found")
+        
+        job = agentic_research_jobs[research_id]
+        
+        if job["status"] != "completed":
+            raise HTTPException(status_code=400, detail="Research not completed yet")
+        
+        if not job["results"]:
+            raise HTTPException(status_code=500, detail="No results available")
+        
+        return job["results"]
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/agentic/research/{research_id}/expand")
+async def expand_agentic_research(
+    research_id: str,
+    request: dict,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user)
+):
+    """Find related papers to expand existing research"""
+    try:
+        if research_id not in agentic_research_jobs:
+            raise HTTPException(status_code=404, detail="Research job not found")
+        
+        job = agentic_research_jobs[research_id]
+        
+        if job["status"] != "completed":
+            raise HTTPException(status_code=400, detail="Research must be completed first")
+        
+        max_new_papers = int(request.get("max_new_papers", 5))
+        
+        # Start background expansion
+        background_tasks.add_task(
+            expand_agentic_research,
+            research_id,
+            max_new_papers
+        )
+        
+        return {
+            "research_id": research_id,
+            "status": "expanding",
+            "message": f"Finding {max_new_papers} related papers"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/agentic/research/{research_id}/save")
+async def save_agentic_research(
+    research_id: str,
+    request: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Save agentic research results as a new project"""
+    try:
+        if research_id not in agentic_research_jobs:
+            raise HTTPException(status_code=404, detail="Research job not found")
+        
+        job = agentic_research_jobs[research_id]
+        if job["status"] != "completed":
+            raise HTTPException(status_code=400, detail="Research not completed yet")
+        
+        results = job["results"]
+        project_name = request.get("project_name", f"Agentic Research: {results.get('research_topic', 'Unknown Topic')}")
+        
+        # Create new project
+        project = Project(
+            name=project_name,
+            user_id=current_user.id,
+            description=f"Auto-generated from agentic research on: {results.get('research_topic', 'Unknown Topic')}"
+        )
+        db.add(project)
+        db.commit()
+        db.refresh(project)
+        
+        # Create individual documents for each paper
+        papers = results.get("papers", [])
+        documents = []
+        
+        print(f"🔍 Creating {len(papers)} documents for agentic research...")
+        
+        for i, paper in enumerate(papers):
+            # Create a document for each paper
+            doc = Document(
+                project_id=project.id,
+                filename=f"agentic_paper_{i+1}_{research_id}.txt",
+                original_name=f"{paper.get('title', f'Paper {i+1}')[:100]}...",
+                processed=1,
+                selected=True
+            )
+            db.add(doc)
+            db.commit()
+            db.refresh(doc)
+            documents.append(doc)
+            print(f"✅ Created document {i+1}: {doc.original_name}")
+        
+        # If no papers, create a single virtual document
+        if not papers:
+            doc = Document(
+                project_id=project.id,
+                filename=f"agentic_research_{research_id}.txt",
+                original_name=f"Agentic Research: {results.get('research_topic', 'Unknown Topic')}",
+                processed=1,
+                selected=True
+            )
+            db.add(doc)
+            db.commit()
+            db.refresh(doc)
+            documents.append(doc)
+        
+        # Save the knowledge graph nodes and edges to the first document
+        # (or distribute across documents if we want to split the graph)
+        graph_data = results.get("knowledge_graph")
+        if graph_data and hasattr(graph_data, 'nodes') and hasattr(graph_data, 'edges'):
+            # For now, save all nodes and edges to the first document
+            # In the future, we could distribute them based on which paper they came from
+            primary_doc = documents[0]
+            
+            # Save nodes
+            for node in graph_data.nodes:
+                pdf_node = PDFGraphNode(
+                    document_id=primary_doc.id,
+                    entity_id=node.id,
+                    entity_type=node.group.value,
+                    count=node.metadata.get("count", 1),
+                    degree=node.value
+                )
+                db.add(pdf_node)
+            
+            # Save edges
+            for edge in graph_data.edges:
+                pdf_edge = PDFGraphEdge(
+                    document_id=primary_doc.id,
+                    source_id=edge.source,
+                    target_id=edge.target,
+                    weight=edge.value,
+                    evidence=edge.metadata.get("all_evidence", []),
+                    relationship_type=edge.metadata.get("relationship_type", "CO_OCCURRENCE")
+                )
+                db.add(pdf_edge)
+            
+            db.commit()
+        
+        # Download actual PDFs and process them like regular uploaded PDFs
+        if papers:
+            print(f"🔍 Downloading and processing {len(papers)} PDFs...")
+            
+            # Initialize services
+            llm_service = LLMService()
+            pdf_processor = PDFProcessor()
+            ner_service = NERService()
+            relationship_extractor = RelationshipExtractor(llm_service)
+            document_chunker = DocumentChunker(chunk_size=500, overlap=100)
+            rag_service = RAGService(llm_service=llm_service)
+            graph_builder = GraphBuilder()
+            
+            # Process each paper by downloading and processing like regular PDFs
+            for i, (paper, doc) in enumerate(zip(papers, documents)):
+                try:
+                    print(f"🔍 Processing paper {i+1}: {paper.get('title', 'Unknown')[:50]}...")
+                    
+                    # Try to download the actual PDF from PubMed
+                    pdf_url = None
+                    if paper.get('pmid'):
+                        # Try to get PDF URL from PubMed
+                        try:
+                            import requests
+                            # Use PMC or direct PDF links if available
+                            if paper.get('pmc_id'):
+                                pdf_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{paper['pmc_id']}/pdf/"
+                            elif paper.get('doi'):
+                                # Try to get PDF from DOI
+                                pdf_url = f"https://doi.org/{paper['doi']}"
+                        except Exception as e:
+                            print(f"⚠️ Could not get PDF URL for paper {i+1}: {e}")
+                    
+                    # If we have a PDF URL, try to download it
+                    if pdf_url:
+                        try:
+                            import requests
+                            response = requests.get(pdf_url, timeout=30)
+                            if response.status_code == 200:
+                                # Save as PDF file
+                                pdf_filename = f"agentic_paper_{i+1}_{research_id}.pdf"
+                                pdf_path = f"uploads/{pdf_filename}"
+                                
+                                with open(pdf_path, 'wb') as f:
+                                    f.write(response.content)
+                                
+                                print(f"📄 Downloaded PDF: {pdf_filename}")
+                                
+                                # Process the PDF like a regular uploaded PDF
+                                pdf_result = pdf_processor.process_pdf(pdf_path)
+                                
+                                if pdf_result and not pdf_result.get("error"):
+                                    # Update document with PDF filename
+                                    doc.filename = pdf_filename
+                                    db.commit()
+                                    
+                                    # Process with NER
+                                    sentences = pdf_result.get("sentences", [])
+                                    full_text = " ".join(sentences)
+                                    
+                                    entities = ner_service.extract_entities(full_text)
+                                    
+                                    # Format entities for get_unique_entities method
+                                    sentence_entities = [{"entities": entities}]
+                                    unique_entities = ner_service.get_unique_entities(sentence_entities)
+                                    
+                                    # Format entities for relationship extraction
+                                    sentence_entities_for_relationships = [{"entities": entities, "sentence": full_text}]
+                                    relationships = relationship_extractor.extract_all_relationships(sentence_entities_for_relationships)
+                                    
+                                    # Build graph for this paper
+                                    graph_data = graph_builder.build_graph(unique_entities, relationships)
+                                    
+                                    # Save nodes and edges from the graph
+                                    for node in graph_data.nodes:
+                                        pdf_node = PDFGraphNode(
+                                            document_id=doc.id,
+                                            entity_id=node.id,
+                                            entity_type=node.group.value,
+                                            count=node.metadata.get("count", 1),
+                                            degree=node.value
+                                        )
+                                        db.add(pdf_node)
+                                    
+                                    for edge in graph_data.edges:
+                                        pdf_edge = PDFGraphEdge(
+                                            document_id=doc.id,
+                                            source_id=edge.source,
+                                            target_id=edge.target,
+                                            weight=edge.value,
+                                            evidence=edge.metadata.get("all_evidence", []),
+                                            relationship_type=edge.metadata.get("relationship_type", "CO_OCCURRENCE")
+                                        )
+                                        db.add(pdf_edge)
+                                    
+                                    # Chunk document for RAG
+                                    chunks = document_chunker.chunk_with_entities(
+                                        full_text,
+                                        entities,
+                                        doc_id=f"agentic_paper_{i+1}_{research_id}"
+                                    )
+                                    
+                                    # Index in RAG
+                                    rag_service.index_document(
+                                        doc_id=f"agentic_paper_{i+1}_{research_id}",
+                                        text_chunks=chunks,
+                                        entities=list(unique_entities.keys())
+                                    )
+                                    
+                                    print(f"✅ Processed PDF {i+1}: {paper.get('title', 'Unknown')[:50]}...")
+                                    continue
+                                    
+                        except Exception as e:
+                            print(f"⚠️ Could not download PDF for paper {i+1}: {e}")
+                    
+                    # Fallback: Create text file if PDF download failed
+                    print(f"📄 Creating text file for paper {i+1} (PDF download failed)")
+                    text_content = f"{paper.get('title', '')}\n\n{paper.get('abstract', '')}"
+                    
+                    # Save as text file
+                    import os
+                    os.makedirs("uploads", exist_ok=True)
+                    text_file_path = f"uploads/{doc.filename}"
+                    with open(text_file_path, 'w', encoding='utf-8') as f:
+                        f.write(text_content)
+                    
+                    # Process with NER (same as regular PDFs)
+                    entities = ner_service.extract_entities(text_content)
+                    
+                    # Format entities for get_unique_entities method
+                    sentence_entities = [{"entities": entities}]
+                    unique_entities = ner_service.get_unique_entities(sentence_entities)
+                    
+                    # Format entities for relationship extraction
+                    sentence_entities_for_relationships = [{"entities": entities, "sentence": text_content}]
+                    relationships = relationship_extractor.extract_all_relationships(sentence_entities_for_relationships)
+                    
+                    # Build graph for this paper (same as regular PDFs)
+                    graph_data = graph_builder.build_graph(unique_entities, relationships)
+                    
+                    # Save nodes and edges from the graph
+                    for node in graph_data.nodes:
+                        pdf_node = PDFGraphNode(
+                            document_id=doc.id,
+                            entity_id=node.id,
+                            entity_type=node.group.value,
+                            count=node.metadata.get("count", 1),
+                            degree=node.value
+                        )
+                        db.add(pdf_node)
+                    
+                    for edge in graph_data.edges:
+                        pdf_edge = PDFGraphEdge(
+                            document_id=doc.id,
+                            source_id=edge.source,
+                            target_id=edge.target,
+                            weight=edge.value,
+                            evidence=edge.metadata.get("all_evidence", []),
+                            relationship_type=edge.metadata.get("relationship_type", "CO_OCCURRENCE")
+                        )
+                        db.add(pdf_edge)
+                    
+                    # Chunk document for RAG
+                    chunks = document_chunker.chunk_document(
+                        text=text_content,
+                        doc_id=f"agentic_paper_{i+1}_{research_id}"
+                    )
+                    
+                    # Index in RAG
+                    rag_service.index_document(
+                        doc_id=f"agentic_paper_{i+1}_{research_id}",
+                        text_chunks=chunks,
+                        entities=list(unique_entities.keys())
+                    )
+                    
+                    print(f"✅ Processed text file {i+1}: {paper.get('title', 'Unknown')[:50]}...")
+                    
+                except Exception as e:
+                    print(f"❌ Error processing agentic paper {i+1}: {e}")
+                    continue
+            
+            # Save combined RAG index
+            rag_index_path = f"uploads/{project.id}_rag_index.pkl"
+            rag_service.save_index(rag_index_path)
+            
+            db.commit()
+        
+        print(f"🎉 Agentic research saved successfully!")
+        print(f"📊 Project ID: {project.id}")
+        print(f"📄 Documents created: {len(documents)}")
+        print(f"🔗 Entities: {len(graph_data.nodes) if graph_data else 0}")
+        print(f"🔗 Relationships: {len(graph_data.edges) if graph_data else 0}")
+        
+        return {
+            "project_id": project.id,
+            "project_name": project.name,
+            "message": f"Agentic research saved as project: {project.name}",
+            "papers_analyzed": results.get("papers_analyzed", 0),
+            "documents_created": len(documents),
+            "entities_count": len(graph_data.nodes) if graph_data else 0,
+            "relationships_count": len(graph_data.edges) if graph_data else 0
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error saving agentic research: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def process_agentic_research(
+    research_id: str,
+    research_topic: str,
+    max_papers: int,
+    search_strategy: str,
+    project_id: Optional[str]
+):
+    """Background task to process agentic research"""
+    try:
+        # Update status
+        agentic_research_jobs[research_id]["status"] = "searching"
+        
+        # Initialize services
+        llm_service = LLMService()
+        agentic_ai = AgenticAIService(llm_service)
+        
+        # Update progress
+        agentic_research_jobs[research_id]["progress"]["papers_found"] = 0
+        
+        # Perform research
+        results = await agentic_ai.autonomous_research(
+            research_topic=research_topic,
+            max_papers=max_papers,
+            search_strategy=search_strategy
+        )
+        
+        # Update progress
+        knowledge_graph = results.get("knowledge_graph")
+        agentic_research_jobs[research_id]["progress"] = {
+            "papers_found": len(results.get("papers", [])),
+            "papers_analyzed": results.get("papers_analyzed", 0),
+            "entities_extracted": len(knowledge_graph.nodes) if knowledge_graph else 0,
+            "relationships_found": len(knowledge_graph.edges) if knowledge_graph else 0
+        }
+        
+        # Save results
+        agentic_research_jobs[research_id]["results"] = results
+        agentic_research_jobs[research_id]["status"] = "completed"
+        
+        print(f"✅ Agentic research completed: {research_id}")
+        
+        # Automatically save the research to the current project
+        try:
+            print(f"💾 Auto-saving research to current project...")
+            
+            # Get database session
+            db = SessionLocal()
+            
+            # Use the provided project_id or get the most recent project
+            if project_id:
+                project = db.query(Project).filter(Project.id == project_id).first()
+            else:
+                # Get the most recent project
+                project = db.query(Project).order_by(Project.created_at.desc()).first()
+            
+            if not project:
+                print(f"❌ No project found to save research to")
+                return
+            
+            print(f"📁 Saving to project: {project.name}")
+            
+            # Create individual documents for each paper
+            papers = results.get("papers", [])
+            documents = []
+            
+            print(f"🔍 Creating {len(papers)} documents for agentic research...")
+            
+            for i, paper in enumerate(papers):
+                # Use paper title as filename (truncated to fit database constraints)
+                paper_title = paper.get('title', f'Paper {i+1}')
+                # Sanitize filename by removing/replacing special characters
+                import re
+                safe_title = re.sub(r'[<>:"/\\|?*]', '_', paper_title)
+                safe_filename = f"{safe_title[:50]}_{i+1}.txt"  # Truncate and add index
+                
+                # Create a document for each paper
+                doc = Document(
+                    id=str(uuid.uuid4()),
+                    project_id=project.id,
+                    filename=safe_filename,
+                    file_path=f"uploads/agentic_paper_{i+1}_{research_id}.txt",
+                    processed=1,
+                    selected=True
+                )
+                db.add(doc)
+                db.commit()
+                db.refresh(doc)
+                documents.append(doc)
+                print(f"✅ Created document {i+1}: {safe_filename}")
+            
+            # Process papers (download PDFs and process them)
+            if papers:
+                print(f"🔍 Downloading and processing {len(papers)} PDFs...")
+                
+                # Initialize services
+                llm_service = LLMService()
+                pdf_processor = PDFProcessor()
+                ner_service = NERService()
+                relationship_extractor = RelationshipExtractor()
+                document_chunker = DocumentChunker(chunk_size=500, overlap=100)
+                rag_service = RAGService(llm_service=llm_service)
+                graph_builder = GraphBuilder()
+                
+                # Process each paper by downloading and processing like regular PDFs
+                for i, (paper, doc) in enumerate(zip(papers, documents)):
+                    try:
+                        print(f"🔍 Processing paper {i+1}: {paper.get('title', 'Unknown')[:50]}...")
+                        
+                        # Try to download the actual PDF from PubMed
+                        pdf_url = None
+                        if paper.get('pmid'):
+                            # Try to get PDF URL from PubMed
+                            try:
+                                import requests
+                                # Use PMC or direct PDF links if available
+                                if paper.get('pmc_id'):
+                                    pdf_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{paper['pmc_id']}/pdf/"
+                                elif paper.get('doi'):
+                                    # Try to get PDF from DOI
+                                    pdf_url = f"https://doi.org/{paper['doi']}"
+                            except Exception as e:
+                                print(f"⚠️ Could not get PDF URL for paper {i+1}: {e}")
+                        
+                        # If we have a PDF URL, try to download it
+                        if pdf_url:
+                            try:
+                                import requests
+                                response = requests.get(pdf_url, timeout=30)
+                                if response.status_code == 200:
+                                    # Save as PDF file
+                                    pdf_filename = f"agentic_paper_{i+1}_{research_id}.pdf"
+                                    pdf_path = f"uploads/{pdf_filename}"
+                                    
+                                    with open(pdf_path, 'wb') as f:
+                                        f.write(response.content)
+                                    
+                                    print(f"📄 Downloaded PDF: {pdf_filename}")
+                                    
+                                    # Process the PDF like a regular uploaded PDF
+                                    pdf_result = pdf_processor.process_pdf(pdf_path)
+                                    
+                                    if pdf_result and not pdf_result.get("error"):
+                                        # Update document with PDF filename
+                                        doc.filename = pdf_filename
+                                        db.commit()
+                                        
+                                        # Process with NER (same aggressive filtering as regular PDFs)
+                                        sentences = pdf_result.get("sentences", [])
+                                        full_text = " ".join(sentences)
+                                        
+                                        # Use same NER pipeline as regular PDFs
+                                        sentence_entities = ner_service.extract_entities_from_sentences(sentences)
+                                        filtered_entities = ner_service.filter_entities(sentence_entities)
+                                        unique_entities = ner_service.get_unique_entities(filtered_entities)
+                                        
+                                        # Format entities for relationship extraction
+                                        relationships = relationship_extractor.extract_all_relationships(filtered_entities)
+                                        
+                                        # Build graph for this paper
+                                        graph_data = graph_builder.build_graph(unique_entities, relationships)
+                                        
+                                        # Save nodes and edges from the graph
+                                        for node in graph_data.nodes:
+                                            pdf_node = PDFGraphNode(
+                                                document_id=doc.id,
+                                                entity_id=node.id,
+                                                entity_type=node.group.value,
+                                                count=node.metadata.get("count", 1),
+                                                degree=node.value
+                                            )
+                                            db.add(pdf_node)
+                                        
+                                        for edge in graph_data.edges:
+                                            pdf_edge = PDFGraphEdge(
+                                                document_id=doc.id,
+                                                source_id=edge.source,
+                                                target_id=edge.target,
+                                                weight=edge.value,
+                                                evidence=edge.metadata.get("all_evidence", []),
+                                                relationship_type=edge.metadata.get("relationship_type", "CO_OCCURRENCE")
+                                            )
+                                            db.add(pdf_edge)
+                                        
+                                        # Chunk document for RAG (use filtered entities)
+                                        entity_list = []
+                                        for sent_data in filtered_entities:
+                                            for ent in sent_data["entities"]:
+                                                entity_list.append({
+                                                    "text": ent["text"],
+                                                    "start": ent.get("start", 0),
+                                                    "end": ent.get("end", 0),
+                                                    "type": ent.get("type", "ENTITY")
+                                                })
+                                        
+                                        chunks = document_chunker.chunk_with_entities(
+                                            full_text,
+                                            f"agentic_paper_{i+1}_{research_id}",
+                                            entity_list
+                                        )
+                                        
+                                        # Index in RAG
+                                        rag_service.index_document(
+                                            doc_id=f"agentic_paper_{i+1}_{research_id}",
+                                            text_chunks=chunks,
+                                            entities=list(unique_entities.keys())
+                                        )
+                                        
+                                        print(f"✅ Processed PDF {i+1}: {paper.get('title', 'Unknown')[:50]}...")
+                                        continue
+                                        
+                            except Exception as e:
+                                print(f"⚠️ Could not download PDF for paper {i+1}: {e}")
+                        
+                        # Fallback: Create text file if PDF download failed
+                        print(f"📄 Creating text file for paper {i+1} (PDF download failed)")
+                        text_content = f"{paper.get('title', '')}\n\n{paper.get('abstract', '')}"
+                        
+                        # Save as text file
+                        import os
+                        os.makedirs("uploads", exist_ok=True)
+                        text_file_path = f"uploads/{doc.filename}"
+                        with open(text_file_path, 'w', encoding='utf-8') as f:
+                            f.write(text_content)
+                        
+                        # Process with NER (same aggressive filtering as regular PDFs)
+                        # Split text into sentences for proper NER processing
+                        spacy_doc = ner_service.nlp(text_content)
+                        sentences = [sent.text.strip() for sent in spacy_doc.sents if sent.text.strip()]
+                        
+                        # Use same NER pipeline as regular PDFs
+                        sentence_entities = ner_service.extract_entities_from_sentences(sentences)
+                        filtered_entities = ner_service.filter_entities(sentence_entities)
+                        unique_entities = ner_service.get_unique_entities(filtered_entities)
+                        
+                        # Format entities for relationship extraction
+                        relationships = relationship_extractor.extract_all_relationships(filtered_entities)
+                        
+                        # Build graph for this paper (same as regular PDFs)
+                        graph_data = graph_builder.build_graph(unique_entities, relationships)
+                        
+                        # Save nodes and edges from the graph
+                        for node in graph_data.nodes:
+                            pdf_node = PDFGraphNode(
+                                document_id=doc.id,
+                                entity_id=node.id,
+                                entity_type=node.group.value,
+                                count=node.metadata.get("count", 1),
+                                degree=node.value
+                            )
+                            db.add(pdf_node)
+                        
+                        for edge in graph_data.edges:
+                            pdf_edge = PDFGraphEdge(
+                                document_id=doc.id,
+                                source_id=edge.source,
+                                target_id=edge.target,
+                                weight=edge.value,
+                                evidence=edge.metadata.get("all_evidence", []),
+                                relationship_type=edge.metadata.get("relationship_type", "CO_OCCURRENCE")
+                            )
+                            db.add(pdf_edge)
+                        
+                        # Chunk document for RAG (use filtered entities)
+                        entity_list = []
+                        for sent_data in filtered_entities:
+                            for ent in sent_data["entities"]:
+                                entity_list.append({
+                                    "text": ent["text"],
+                                    "start": ent.get("start", 0),
+                                    "end": ent.get("end", 0),
+                                    "type": ent.get("type", "ENTITY")
+                                })
+                        
+                        chunks = document_chunker.chunk_with_entities(
+                            text_content,
+                            f"agentic_paper_{i+1}_{research_id}",
+                            entity_list
+                        )
+                        
+                        # Index in RAG
+                        rag_service.index_document(
+                            doc_id=f"agentic_paper_{i+1}_{research_id}",
+                            text_chunks=chunks,
+                            entities=list(unique_entities.keys())
+                        )
+                        
+                        print(f"✅ Processed text file {i+1}: {paper.get('title', 'Unknown')[:50]}...")
+                        
+                    except Exception as e:
+                        print(f"❌ Error processing agentic paper {i+1}: {e}")
+                        continue
+                
+                # Save combined RAG index
+                rag_index_path = f"uploads/{project.id}_rag_index.pkl"
+                rag_service.save_index(rag_index_path)
+                
+                db.commit()
+            
+            print(f"🎉 Agentic research added to project: {project.name}")
+            print(f"📊 Project ID: {project.id}")
+            print(f"📄 Documents added: {len(documents)}")
+            
+            # Close database session
+            db.close()
+            
+        except Exception as e:
+            print(f"❌ Error auto-saving research: {e}")
+            if 'db' in locals():
+                db.close()
+        
+    except Exception as e:
+        print(f"❌ Agentic research failed: {e}")
+        agentic_research_jobs[research_id]["status"] = "failed"
+        agentic_research_jobs[research_id]["error"] = str(e)
+
+
+async def expand_agentic_research(research_id: str, max_new_papers: int):
+    """Background task to expand research with related papers"""
+    try:
+        job = agentic_research_jobs[research_id]
+        job["status"] = "expanding"
+        
+        # Initialize services
+        llm_service = LLMService()
+        agentic_ai = AgenticAIService(llm_service)
+        
+        # Find related papers
+        current_papers = job["results"]["papers"]
+        related_papers = await agentic_ai.find_related_papers(
+            current_papers=current_papers,
+            max_new_papers=max_new_papers
+        )
+        
+        # Update results with new papers
+        job["results"]["papers"].extend(related_papers)
+        job["results"]["papers_analyzed"] = len(job["results"]["papers"])
+        
+        job["status"] = "completed"
+        
+        print(f"✅ Research expanded: {research_id} with {len(related_papers)} new papers")
+        
+    except Exception as e:
+        print(f"❌ Research expansion failed: {e}")
+        agentic_research_jobs[research_id]["status"] = "failed"
+        agentic_research_jobs[research_id]["error"] = str(e)
 
 
 if __name__ == "__main__":

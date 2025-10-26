@@ -9,6 +9,7 @@ from .rag_service import RAGService
 from .document_chunker import DocumentChunker
 from .pubmed_service import PubMedService
 from .ctgov_service import ClinicalTrialsService
+from .agentic_ai_service import AgenticAIService
 
 __all__ = [
     "PDFProcessor",
@@ -22,5 +23,6 @@ __all__ = [
     "DocumentChunker",
     "PubMedService",
     "ClinicalTrialsService",
+    "AgenticAIService",
 ]
 

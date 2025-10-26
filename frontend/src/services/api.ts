@@ -329,5 +329,69 @@ export const apiService = {
     const response = await api.get('/');
     return response.data;
   },
+
+  /**
+   * Agentic AI Research Methods
+   */
+  async startAgenticResearch(request: {
+    research_topic: string;
+    max_papers?: number;
+    search_strategy?: string;
+    project_id?: string;
+  }): Promise<{
+    research_id: string;
+    status: string;
+    message: string;
+  }> {
+    const response = await api.post('/api/agentic/research', request);
+    return response.data;
+  },
+
+  async getAgenticResearchStatus(researchId: string): Promise<{
+    research_id: string;
+    status: string;
+    progress: {
+      papers_found: number;
+      papers_analyzed: number;
+      entities_extracted: number;
+      relationships_found: number;
+    };
+    started_at: string;
+    error?: string;
+  }> {
+    const response = await api.get(`/api/agentic/research/${researchId}/status`);
+    return response.data;
+  },
+
+  async getAgenticResearchResults(researchId: string): Promise<any> {
+    const response = await api.get(`/api/agentic/research/${researchId}/results`);
+    return response.data;
+  },
+
+  async expandAgenticResearch(researchId: string, maxNewPapers: number = 5): Promise<{
+    research_id: string;
+    status: string;
+    message: string;
+  }> {
+    const response = await api.post(`/api/agentic/research/${researchId}/expand`, {
+      max_new_papers: maxNewPapers
+    });
+    return response.data;
+  },
+
+  async saveAgenticResearch(researchId: string, projectName?: string): Promise<{
+    project_id: string;
+    project_name: string;
+    message: string;
+    papers_analyzed: number;
+    documents_created: number;
+    entities_count: number;
+    relationships_count: number;
+  }> {
+    const response = await api.post(`/api/agentic/research/${researchId}/save`, {
+      project_name: projectName
+    });
+    return response.data;
+  },
 };
 
