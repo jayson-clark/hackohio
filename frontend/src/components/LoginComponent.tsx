@@ -100,9 +100,9 @@ export const LoginComponent: React.FC = () => {
       <div className="bg-gray-800 rounded-lg shadow-xl p-8 max-w-md w-full mx-4">
         <div className="text-center">
           <div className="mb-8">
-            <h1 className="text-3xl font-bold text-white mb-2">Synapse Mapper</h1>
+            <h1 className="text-3xl font-bold text-white mb-2">Empirica</h1>
             <p className="text-gray-300">
-              Transform biomedical PDFs into interactive knowledge graphs
+            Empirical research, scaled with intelligence
             </p>
           </div>
           
