@@ -10,6 +10,7 @@ from .document_chunker import DocumentChunker
 from .pubmed_service import PubMedService
 from .ctgov_service import ClinicalTrialsService
 from .agentic_ai_service import AgenticAIService
+from .google_scholar_service import GoogleScholarService
 
 __all__ = [
     "PDFProcessor",
@@ -24,5 +25,6 @@ __all__ = [
     "PubMedService",
     "ClinicalTrialsService",
     "AgenticAIService",
+    "GoogleScholarService",
 ]
 

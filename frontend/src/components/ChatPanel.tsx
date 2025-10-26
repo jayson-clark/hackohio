@@ -4,6 +4,61 @@ import { useStore } from '@/store/useStore';
 
 type Message = { role: 'user' | 'assistant'; content: string; isAgentic?: boolean; researchId?: string };
 
+// Simple markdown rendering function
+const renderMarkdown = (text: string) => {
+  // Split by lines
+  const lines = text.split('\n');
+  const elements: JSX.Element[] = [];
+  
+  lines.forEach((line, idx) => {
+    // Bold text: **text**
+    let content = line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    // Italic text: *text*
+    content = content.replace(/\*(.*?)\*/g, '<em>$1</em>');
+    // Code: `text`
+    content = content.replace(/`(.*?)`/g, '<code>$1</code>');
+    
+    // Headers
+    if (line.startsWith('### ')) {
+      elements.push(
+        <h3 key={idx} className="text-lg font-bold mt-2 mb-1">{line.substring(4)}</h3>
+      );
+    } else if (line.startsWith('## ')) {
+      elements.push(
+        <h2 key={idx} className="text-xl font-bold mt-3 mb-2">{line.substring(3)}</h2>
+      );
+    } else if (line.startsWith('# ')) {
+      elements.push(
+        <h1 key={idx} className="text-2xl font-bold mt-4 mb-2">{line.substring(2)}</h1>
+      );
+    } 
+    // Bullet points
+    else if (line.startsWith('• ') || line.startsWith('- ')) {
+      elements.push(
+        <div key={idx} className="ml-4" dangerouslySetInnerHTML={{ __html: '• ' + content.substring(2) }} />
+      );
+    }
+    // Numbered list
+    else if (/^\d+\. /.test(line)) {
+      elements.push(
+        <div key={idx} className="ml-4" dangerouslySetInnerHTML={{ __html: line }} />
+      );
+    }
+    // Empty line
+    else if (line.trim() === '') {
+      elements.push(<div key={idx} className="h-2" />);
+    }
+    // Regular text with inline formatting
+    else {
+      elements.push(
+        <div key={idx} dangerouslySetInnerHTML={{ __html: content }} />
+      );
+    }
+  });
+  
+  return elements;
+};
+
 export const ChatPanel = () => {
   const { filteredGraphData, setHighlightedNodes, setHighlightedLinks, currentProject } = useStore();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -52,7 +107,7 @@ export const ChatPanel = () => {
     // Add research message
     const researchMessage = {
       role: 'assistant' as const,
-      content: `🔬 I'll research "${query}" for you. This may take a few minutes...`,
+      content: `Starting research on: "${query}". This may take a few minutes...`,
       isAgentic: true
     };
     
@@ -76,7 +131,7 @@ export const ChatPanel = () => {
       console.error('Failed to start research:', error);
       setMessages(prev => [...prev, {
         role: 'assistant' as const,
-        content: '❌ Sorry, I couldn\'t start the research. Please try again.',
+        content: 'Sorry, I couldn\'t start the research. Please try again.',
         isAgentic: true
       }]);
       setIsResearching(false);
@@ -88,6 +143,9 @@ export const ChatPanel = () => {
     const poll = async () => {
       try {
         const status = await apiService.getAgenticResearchStatus(researchId);
+        
+        // Update current research with latest status
+        setCurrentResearch(status);
         
         if (status.status === 'completed') {
           // Get results
@@ -107,14 +165,14 @@ export const ChatPanel = () => {
         } else if (status.status === 'failed') {
           setMessages(prev => [...prev, {
             role: 'assistant' as const,
-            content: `❌ Research failed: ${status.error}`,
+            content: `Research failed: ${status.error}`,
             isAgentic: true
           }]);
           setIsResearching(false);
           setCurrentResearch(null);
         } else {
-          // Still processing, poll again
-          setTimeout(poll, 2000);
+          // Still processing, poll again in 1 second for more frequent updates
+          setTimeout(poll, 1000);
         }
       } catch (error) {
         console.error('Failed to check research status:', error);
@@ -131,11 +189,11 @@ export const ChatPanel = () => {
     const insights = results.insights || [];
     const recommendations = results.recommendations || {};
     
-    let message = `🔬 **Research Complete!**\n\n`;
-    message += `📚 **Analyzed ${papers} papers**\n\n`;
+    let message = `**Research Complete!**\n\n`;
+    message += `**Papers Analyzed:** ${papers}\n\n`;
     
     if (insights.length > 0) {
-      message += `💡 **Key Insights:**\n`;
+      message += `**Key Insights:**\n`;
       insights.slice(0, 3).forEach((insight: any, i: number) => {
         message += `${i + 1}. **${insight.title}**\n`;
         message += `   ${insight.description?.substring(0, 100)}...\n\n`;
@@ -143,14 +201,14 @@ export const ChatPanel = () => {
     }
     
     if (recommendations.research_gaps?.length > 0) {
-      message += `🎯 **Research Gaps Identified:**\n`;
+      message += `**Research Gaps Identified:**\n`;
       recommendations.research_gaps.slice(0, 2).forEach((gap: string, i: number) => {
         message += `${i + 1}. ${gap}\n`;
       });
       message += `\n`;
     }
     
-    message += `📊 **Knowledge Graph:** ${results.knowledge_graph?.nodes?.length || 0} entities, ${results.knowledge_graph?.edges?.length || 0} relationships`;
+    message += `**Knowledge Graph:** ${results.knowledge_graph?.nodes?.length || 0} entities, ${results.knowledge_graph?.edges?.length || 0} relationships`;
     
     return message;
   };
@@ -202,20 +260,21 @@ export const ChatPanel = () => {
 
   return (
     <>
-      {/* Toggle Button */}
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="fixed right-4 bottom-4 z-30 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white shadow-lg"
-      >
-        {open ? 'Hide Chat' : 'Chat'}
-      </button>
+      {!open ? (
+        <button
+          onClick={() => setOpen((v) => !v)}
+          className="fixed right-4 bottom-4 z-30 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white shadow-lg"
+        >
+          Chat
+        </button>
+      ) : null}
 
       {!open ? null : (
-        <div className="fixed right-0 top-0 h-full w-[360px] bg-gray-900/90 border-l border-gray-800 backdrop-blur-md z-20 flex flex-col">
+        <div className="fixed right-0 top-0 h-full w-[450px] bg-gray-900/95 border-l border-gray-800 backdrop-blur-md z-20 flex flex-col">
       <div className="p-3 border-b border-gray-800 text-gray-200 font-semibold flex items-center justify-between">
         <span>Smart Chat</span>
         <div className="flex gap-2">
-          {/* Agent Mode Toggle */}
+          {/* Agent Mode Toggle - removed emoji */}
           <button
             onClick={() => setAgentMode(!agentMode)}
             className={`text-xs px-2 py-1 rounded text-white ${
@@ -224,7 +283,15 @@ export const ChatPanel = () => {
                 : 'bg-gray-600 hover:bg-gray-500'
             }`}
           >
-            {agentMode ? '🤖 Agent ON' : '🤖 Agent OFF'}
+            {agentMode ? 'Agent ON' : 'Agent OFF'}
+          </button>
+          
+          {/* Minimize Button - next to Agent Mode */}
+          <button
+            onClick={() => setOpen((v) => !v)}
+            className="text-xs px-2 py-1 bg-blue-600 hover:bg-blue-500 rounded text-white"
+          >
+            Minimize
           </button>
           
           {messages.length > 0 && (
@@ -239,13 +306,12 @@ export const ChatPanel = () => {
               Clear
             </button>
           )}
-          <button onClick={() => setOpen(false)} className="text-xs px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded border border-gray-700 text-gray-300">Minimize</button>
         </div>
       </div>
-      <div className="flex-1 overflow-auto p-3 space-y-3">
+      <div className="flex-1 overflow-auto p-3 space-y-3 mb-2">
         {messages.map((m, i) => (
           <div key={i} className={m.role === 'user' ? 'text-right' : 'text-left'}>
-            <div className={`inline-block px-3 py-2 rounded-lg ${
+            <div className={`inline-block px-3 py-2 rounded-lg max-w-[90%] ${
               m.role === 'user' 
                 ? 'bg-blue-600 text-white' 
                 : m.isAgentic 
@@ -253,11 +319,13 @@ export const ChatPanel = () => {
                   : 'bg-gray-800 text-gray-100'
             }`}>
               {m.isAgentic && (
-                <div className="text-xs text-purple-300 mb-1">
-                  🤖 Agentic Research
+                <div className="text-xs text-purple-300 mb-1 font-medium">
+                  Agentic Research
                 </div>
               )}
-              {m.content}
+              <div className="whitespace-pre-wrap break-words text-sm leading-relaxed">
+                {renderMarkdown(m.content)}
+              </div>
             </div>
           </div>
         ))}
@@ -280,43 +348,75 @@ export const ChatPanel = () => {
           </div>
         )}
         
-        {/* Research Status Indicator */}
+        {/* Research Status Indicator - Micro Updates */}
         {isResearching && (
-          <div className="bg-purple-900/50 border border-purple-600 rounded-lg p-3 mb-3">
-            <div className="flex items-center space-x-2 text-purple-200">
-              <div className="animate-spin">🔬</div>
-              <span className="text-sm">Researching your topic...</span>
+          <div className="bg-purple-900/50 border border-purple-600 rounded-lg p-4 space-y-3">
+            {/* Loading spinner with current stage */}
+            <div className="flex items-center space-x-3">
+              <div className="relative w-6 h-6">
+                <div className="absolute inset-0 border-2 border-transparent border-t-purple-400 rounded-full animate-spin"></div>
+              </div>
+              <span className="text-sm font-medium text-purple-100">
+                {currentResearch?.current_stage || 'Processing...'}
+              </span>
             </div>
+            
             {currentResearch && (
-              <div className="text-xs text-purple-300 mt-1">
-                Status: {currentResearch.status}
+              <div className="space-y-3">
+                {/* Progress counters */}
+                {currentResearch.progress && (
+                  <div className="text-xs text-purple-300 space-y-1 bg-purple-900/30 rounded p-2">
+                    <div className="flex justify-between">
+                      <span>Papers found:</span>
+                      <span className="font-medium text-purple-200">{currentResearch.progress.papers_found}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Papers analyzed:</span>
+                      <span className="font-medium text-purple-200">{currentResearch.progress.papers_analyzed}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Entities extracted:</span>
+                      <span className="font-medium text-purple-200">{currentResearch.progress.entities_extracted}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Relationships found:</span>
+                      <span className="font-medium text-purple-200">{currentResearch.progress.relationships_found}</span>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
         )}
       </div>
       <div className="p-3 border-t border-gray-800 flex gap-2">
-        <input
+        <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && send()}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              send();
+            }
+          }}
           placeholder={
             agentMode 
               ? "Ask me to research anything..." 
               : "Ask about the graph or research topics..."
           }
-          className="flex-1 bg-gray-800 text-gray-100 px-3 py-2 rounded outline-none border border-gray-700"
+          className="flex-1 bg-gray-800 text-gray-100 px-3 py-2 rounded outline-none border border-gray-700 resize-none min-h-[80px] max-h-[200px] overflow-y-auto"
+          rows={3}
         />
         <button
           onClick={send}
           disabled={loading || isResearching}
-          className={`px-3 py-2 rounded text-white ${
+          className={`px-4 py-2 rounded text-white font-medium ${
             isResearching 
               ? 'bg-purple-600 cursor-not-allowed' 
               : 'bg-blue-600 hover:bg-blue-500'
           } disabled:opacity-50`}
         >
-          {isResearching ? '🔬' : loading ? '...' : 'Send'}
+          {isResearching ? 'Researching...' : loading ? 'Sending...' : 'Send'}
         </button>
       </div>
     </div>

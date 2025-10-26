@@ -350,6 +350,7 @@ export const apiService = {
   async getAgenticResearchStatus(researchId: string): Promise<{
     research_id: string;
     status: string;
+    current_stage: string;
     progress: {
       papers_found: number;
       papers_analyzed: number;

@@ -9,11 +9,13 @@ import {
   Box,
   BoxSelect,
   Plus,
+  LogOut,
 } from 'lucide-react';
 import { useStore } from '@/store/useStore';
 import { ENTITY_COLORS, ENTITY_LABELS, EntityType } from '@/types';
 import { apiService } from '@/services/api';
 import { PDFSelector } from './PDFSelector';
+import { useAuth } from '@/contexts/AuthContext';
 import toast from 'react-hot-toast';
 
 export function Sidebar() {
@@ -29,7 +31,10 @@ export function Sidebar() {
     toggleAnalytics,
     currentProject,
     setShowUploadPanel,
+    setShowProjectSelection,
   } = useStore();
+  
+  const { user, logout } = useAuth();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [hypotheses, setHypotheses] = useState<
@@ -91,6 +96,43 @@ export function Sidebar() {
         } w-80 overflow-y-auto`}
       >
         <div className="p-6 pt-20">
+          {/* User Profile Card - Clickable to switch projects */}
+          {user && (
+            <button
+              onClick={() => setShowProjectSelection(true)}
+              className="mb-6 w-full p-3 bg-gradient-to-r from-blue-900/40 to-purple-900/40 rounded-lg border border-blue-700/30 backdrop-blur-sm hover:from-blue-900/60 hover:to-purple-900/60 hover:border-blue-600/50 transition-all text-left"
+              title="Click to switch projects"
+            >
+              <div className="flex items-center space-x-3">
+                {user.picture ? (
+                  <img 
+                    src={user.picture} 
+                    alt={user.name}
+                    className="w-10 h-10 rounded-full border 2px border-blue-500"
+                  />
+                ) : (
+                  <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold text-sm">
+                    {user.name.charAt(0).toUpperCase()}
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-white truncate">{user.name}</p>
+                  <p className="text-xs text-gray-300 truncate">{user.email}</p>
+                </div>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    logout();
+                  }}
+                  title="Logout"
+                  className="text-gray-400 hover:text-red-400 transition-colors p-1"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              </div>
+            </button>
+          )}
+          
           {/* Header */}
           <div className="mb-6">
             <h2 className="text-2xl font-bold text-white mb-1">
@@ -362,72 +404,6 @@ export function Sidebar() {
                 className="flex-1 text-xs px-2 py-2 bg-green-600 hover:bg-green-500 rounded text-white"
               >
                 Import
-              </button>
-            </div>
-          </div>
-
-          {/* Paper Discovery */}
-          <div className="mt-6">
-            <label className="block text-sm font-medium text-gray-300 mb-2">Discover Papers</label>
-            <div className="flex gap-2 mb-2">
-              <input
-                type="text"
-                placeholder="e.g. NSCLC microRNA"
-                className="flex-1 text-xs px-2 py-1 bg-gray-800 border border-gray-700 rounded text-white"
-                id="paper-query"
-              />
-              <button
-                onClick={async () => {
-                  const input = document.getElementById('paper-query') as HTMLInputElement;
-                  if (!input?.value) return;
-                  try {
-                    const res = await apiService.discoverPapers(input.value, 10);
-                    alert(`Found ${res.papers.length} papers! Check console for details.`);
-                    console.log('Discovered papers:', res.papers);
-                  } catch (e) {
-                    alert('Error discovering papers');
-                  }
-                }}
-                className="text-xs px-2 py-1 bg-purple-600 hover:bg-purple-500 rounded text-white"
-              >
-                Search
-              </button>
-            </div>
-          </div>
-
-          {/* Clinical Trials */}
-          <div className="mt-6">
-            <label className="block text-sm font-medium text-gray-300 mb-2">Discover Trials</label>
-            <div className="flex gap-2 mb-2">
-              <input
-                type="text"
-                placeholder="e.g. lung cancer"
-                className="flex-1 text-xs px-2 py-1 bg-gray-800 border border-gray-700 rounded text-white"
-                id="trial-query"
-              />
-              <button
-                onClick={async () => {
-                  const input = document.getElementById('trial-query') as HTMLInputElement;
-                  if (!input?.value) return;
-                  try {
-                    const res = await apiService.discoverTrials(input.value, 20);
-                    if (res.graph && filteredGraphData) {
-                      // Merge trial graph with existing
-                      const merged = {
-                        nodes: [...filteredGraphData.nodes, ...res.graph.nodes],
-                        edges: [...filteredGraphData.edges, ...res.graph.edges],
-                        metadata: { ...filteredGraphData.metadata, trials_added: res.trials.length }
-                      };
-                      useStore.getState().setGraphData(merged);
-                      alert(`Added ${res.trials.length} trials to graph!`);
-                    }
-                  } catch (e) {
-                    alert('Error discovering trials');
-                  }
-                }}
-                className="text-xs px-2 py-1 bg-orange-600 hover:bg-orange-500 rounded text-white"
-              >
-                Add
               </button>
             </div>
           </div>

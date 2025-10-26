@@ -117,14 +117,32 @@ class PubMedService:
             year_elem = article_node.find(".//PubDate/Year")
             year = int(year_elem.text) if year_elem is not None and year_elem.text else None
             
+            # DOI - Try to extract DOI for PDF access
+            doi = None
+            for article_id in article_elem.findall(".//ArticleId"):
+                if article_id.get("IdType") == "doi":
+                    doi = article_id.text
+                    break
+            
+            # PMC ID - For free full-text access
+            pmc_id = None
+            for article_id in article_elem.findall(".//ArticleId"):
+                if article_id.get("IdType") == "pmc":
+                    pmc_id = article_id.text
+                    break
+            
             return {
+                "pmid": pmid,
                 "id": pmid,
                 "title": title,
                 "abstract": abstract,
                 "authors": authors[:5],  # Limit to first 5
                 "journal": journal,
                 "year": year,
-                "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
+                "doi": doi,
+                "pmc_id": pmc_id,
+                "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
+                "pdf_url": f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmc_id}/pdf/" if pmc_id else None
             }
         except Exception as e:
             print(f"Error extracting article: {e}")

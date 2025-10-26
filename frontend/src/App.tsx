@@ -12,7 +12,6 @@ import { Sidebar } from './components/Sidebar';
 import { ChatPanel } from './components/ChatPanel';
 import { NodeDetails } from './components/NodeDetails';
 import { LoginComponent } from './components/LoginComponent';
-import { UserProfile } from './components/UserProfile';
 import { ProjectSelection } from './components/ProjectSelection';
 
 function AppContent() {
@@ -157,11 +156,6 @@ function AppContent() {
           }}
         />
 
-        {/* Header with user profile */}
-        <div className="absolute top-4 right-4 z-50">
-          <UserProfile />
-        </div>
-
         <div className="w-full h-full flex items-center justify-center p-4">
           <UploadPanel />
         </div>
@@ -236,11 +230,6 @@ function AppContent() {
           },
         }}
       />
-
-      {/* Header with user profile */}
-      <div className="absolute top-4 right-4 z-50">
-        <UserProfile />
-      </div>
 
       {!graphData ? (
         <div className="w-full h-full flex items-center justify-center p-4">

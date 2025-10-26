@@ -7,6 +7,7 @@ from pathlib import Path
 
 from app.services.pubmed_service import PubMedService
 from app.services.ctgov_service import ClinicalTrialsService
+from app.services.google_scholar_service import GoogleScholarService
 from app.services.llm_service import LLMService
 from app.services.rag_service import RAGService
 from app.services.document_chunker import DocumentChunker
@@ -29,6 +30,7 @@ class AgenticAIService:
     def __init__(self, llm_service: LLMService):
         self.llm_service = llm_service
         self.pubmed_service = PubMedService()
+        self.google_scholar_service = GoogleScholarService()
         self.ctgov_service = ClinicalTrialsService()
         self.rag_service = RAGService(llm_service=llm_service)
         self.document_chunker = DocumentChunker(chunk_size=500, overlap=100)
@@ -129,13 +131,30 @@ class AgenticAIService:
             return [research_topic]
     
     async def _search_papers(self, query: str, max_results: int) -> List[Dict[str, Any]]:
-        """Search for papers using PubMed"""
+        """Search for papers using PubMed and enrich with Google Scholar PDF links"""
         try:
             # Search PubMed
             pmids = self.pubmed_service.search(query, max_results)
             
             # Fetch abstracts for all PMIDs at once
             papers = self.pubmed_service.fetch_abstracts(pmids)
+            
+            # For papers without PDF links, try Google Scholar
+            print(f"🔍 Enriching {len(papers)} papers with Google Scholar PDF links...")
+            for paper in papers:
+                if not paper.get('pdf_url') and not paper.get('pmc_id'):
+                    # Try to find PDF on Google Scholar
+                    try:
+                        pdf_url = self.google_scholar_service.find_pdf_for_paper(
+                            title=paper.get('title', ''),
+                            authors=paper.get('authors', [])
+                        )
+                        if pdf_url:
+                            paper['pdf_url'] = pdf_url
+                            paper['pdf_source'] = 'google_scholar'
+                            print(f"   ✓ Found PDF on Google Scholar: {paper.get('title', '')[:50]}")
+                    except Exception as e:
+                        print(f"   ⚠️ Google Scholar lookup failed for: {paper.get('title', '')[:50]} - {e}")
             
             return papers
         except Exception as e:

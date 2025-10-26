@@ -1809,6 +1809,7 @@ async def start_agentic_research(
         # Initialize job status
         agentic_research_jobs[research_id] = {
             "status": "starting",
+            "current_stage": "Starting research...",
             "progress": {
                 "papers_found": 0,
                 "papers_analyzed": 0,
@@ -1851,13 +1852,19 @@ async def get_agentic_research_status(
             raise HTTPException(status_code=404, detail="Research job not found")
         
         job = agentic_research_jobs[research_id]
-        return {
+        response = {
             "research_id": research_id,
             "status": job["status"],
+            "current_stage": job.get("current_stage", "Processing..."),
             "progress": job["progress"],
             "started_at": job["started_at"],
             "error": job.get("error")
         }
+        
+        # Debug logging
+        print(f"📊 Status request for {research_id}: status={response['status']}, papers_found={response['progress']['papers_found']}, papers_analyzed={response['progress']['papers_analyzed']}, entities={response['progress']['entities_extracted']}")
+        
+        return response
         
     except HTTPException:
         raise
@@ -2245,8 +2252,10 @@ async def process_agentic_research(
 ):
     """Background task to process agentic research"""
     try:
-        # Update status
+        # Update status - Step 1: Searching
         agentic_research_jobs[research_id]["status"] = "searching"
+        agentic_research_jobs[research_id]["current_stage"] = "Searching for papers"
+        print(f"🔍 Step 1: Searching for papers on '{research_topic}'...")
         
         # Initialize services
         llm_service = LLMService()
@@ -2254,28 +2263,68 @@ async def process_agentic_research(
         
         # Update progress
         agentic_research_jobs[research_id]["progress"]["papers_found"] = 0
+        agentic_research_jobs[research_id]["progress"]["papers_analyzed"] = 0
         
-        # Perform research
+        # Perform research with progress updates
+        print(f"📚 Finding papers...")
         results = await agentic_ai.autonomous_research(
             research_topic=research_topic,
             max_papers=max_papers,
             search_strategy=search_strategy
         )
         
-        # Update progress
+        papers_found = len(results.get("papers", []))
+        papers_analyzed = results.get("papers_analyzed", papers_found)
+        
+        # Update progress IMMEDIATELY after search completes with actual values
+        print(f"✅ Search phase complete: {papers_found} papers found")
+        agentic_research_jobs[research_id]["progress"]["papers_found"] = papers_found
+        agentic_research_jobs[research_id]["progress"]["papers_analyzed"] = papers_analyzed
+        agentic_research_jobs[research_id]["current_stage"] = f"Found {papers_found} papers - Processing..."
+        agentic_research_jobs[research_id]["status"] = "analyzing"
+        
+        # Small delay to let frontend see the papers_found update
+        await asyncio.sleep(0.3)
+        
+        # Update status - Step 2: Extracting
+        agentic_research_jobs[research_id]["status"] = "extracting"
+        agentic_research_jobs[research_id]["current_stage"] = "Extracting entities and relationships"
+        print(f"🧬 Step 2: Extracting entities and relationships...")
+        
+        # Update progress - entities extracted
         knowledge_graph = results.get("knowledge_graph")
-        agentic_research_jobs[research_id]["progress"] = {
-            "papers_found": len(results.get("papers", [])),
-            "papers_analyzed": results.get("papers_analyzed", 0),
-            "entities_extracted": len(knowledge_graph.nodes) if knowledge_graph else 0,
-            "relationships_found": len(knowledge_graph.edges) if knowledge_graph else 0
-        }
+        entities_found = len(knowledge_graph.nodes) if knowledge_graph else 0
+        relationships_found = len(knowledge_graph.edges) if knowledge_graph else 0
+        
+        agentic_research_jobs[research_id]["progress"]["entities_extracted"] = entities_found
+        agentic_research_jobs[research_id]["progress"]["relationships_found"] = relationships_found
+        agentic_research_jobs[research_id]["current_stage"] = f"Extracted {entities_found} entities, {relationships_found} relationships"
+        print(f"✅ Extracted {entities_found} entities and {relationships_found} relationships")
+        
+        # Small delay to let frontend see the entities update
+        await asyncio.sleep(0.3)
+        
+        # Update status - Step 3: Building graph
+        agentic_research_jobs[research_id]["status"] = "building"
+        agentic_research_jobs[research_id]["current_stage"] = "Building knowledge graph"
+        print(f"📊 Step 3: Building knowledge graph with {entities_found} entities...")
+        
+        # Update status - Step 4: Saving
+
+
+        agentic_research_jobs[research_id]["status"] = "saving"
+        agentic_research_jobs[research_id]["current_stage"] = "Saving to project"
+        print(f"💾 Step 5: Saving research to project...")
         
         # Save results
         agentic_research_jobs[research_id]["results"] = results
         agentic_research_jobs[research_id]["status"] = "completed"
+        agentic_research_jobs[research_id]["current_stage"] = "Research complete!"
         
         print(f"✅ Agentic research completed: {research_id}")
+        print(f"   Papers analyzed: {results.get('papers_analyzed', 0)}")
+        print(f"   Entities found: {entities_found}")
+        print(f"   Relationships: {relationships_found}")
         
         # Automatically save the research to the current project
         try:
@@ -2327,8 +2376,12 @@ async def process_agentic_research(
                 print(f"✅ Created document {i+1}: {safe_filename}")
             
             # Process papers (download PDFs and process them)
+            # NOTE: The system attempts to download full PDFs from PubMed Central (PMC) when available.
+            # If a PDF is not accessible (paywalled or not in PMC), it falls back to processing the abstract.
+            # This ensures we always get some content even when full PDFs aren't available.
             if papers:
                 print(f"🔍 Downloading and processing {len(papers)} PDFs...")
+                print(f"   Note: Will attempt PDF download from PMC, fallback to abstracts if unavailable")
                 
                 # Initialize services
                 llm_service = LLMService()
@@ -2344,27 +2397,54 @@ async def process_agentic_research(
                     try:
                         print(f"🔍 Processing paper {i+1}: {paper.get('title', 'Unknown')[:50]}...")
                         
-                        # Try to download the actual PDF from PubMed
+                        # Try to download the actual PDF from multiple sources
                         pdf_url = None
+                        pdf_downloaded = False
+                        pdf_source = None
+                        
                         if paper.get('pmid'):
-                            # Try to get PDF URL from PubMed
-                            try:
-                                import requests
-                                # Use PMC or direct PDF links if available
-                                if paper.get('pmc_id'):
-                                    pdf_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{paper['pmc_id']}/pdf/"
-                                elif paper.get('doi'):
-                                    # Try to get PDF from DOI
-                                    pdf_url = f"https://doi.org/{paper['doi']}"
-                            except Exception as e:
-                                print(f"⚠️ Could not get PDF URL for paper {i+1}: {e}")
+                            # Priority 1: Google Scholar PDF (often has open access versions)
+                            if paper.get('pdf_url') and paper.get('pdf_source') == 'google_scholar':
+                                pdf_url = paper['pdf_url']
+                                pdf_source = 'Google Scholar'
+                                print(f"   📎 Found PDF on Google Scholar - attempting download...")
+                            # Priority 2: PMC (PubMed Central)
+                            elif paper.get('pmc_id'):
+                                pdf_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{paper['pmc_id']}/pdf/"
+                                pdf_source = 'PubMed Central'
+                                print(f"   📎 Found PMC ID: {paper['pmc_id']} - attempting PDF download...")
+                            # Priority 3: DOI
+                            elif paper.get('doi'):
+                                pdf_url = f"https://doi.org/{paper['doi']}"
+                                pdf_source = 'DOI'
+                                print(f"   📎 Found DOI: {paper['doi']} - attempting PDF download...")
+                            # Priority 4: Direct PDF URL from paper metadata
+                            elif paper.get('pdf_url'):
+                                pdf_url = paper['pdf_url']
+                                pdf_source = 'Direct Link'
+                                print(f"   📎 Found direct PDF link - attempting download...")
+                            else:
+                                print(f"   ⚠️  No PDF sources found - will use abstract only")
                         
                         # If we have a PDF URL, try to download it
                         if pdf_url:
                             try:
                                 import requests
-                                response = requests.get(pdf_url, timeout=30)
-                                if response.status_code == 200:
+                                print(f"   ⬇️  Downloading PDF from {pdf_source}: {pdf_url}")
+                                
+                                # Different strategies for different sources
+                                headers = {
+                                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+                                    'Accept': 'application/pdf,*/*'
+                                }
+                                
+                                response = requests.get(pdf_url, timeout=30, headers=headers, allow_redirects=True)
+                                
+                                # Check if we got a PDF
+                                content_type = response.headers.get('Content-Type', '').lower()
+                                is_pdf = 'application/pdf' in content_type or pdf_url.lower().endswith('.pdf')
+                                
+                                if response.status_code == 200 and (is_pdf or len(response.content) > 10000):
                                     # Save as PDF file
                                     pdf_filename = f"agentic_paper_{i+1}_{research_id}.pdf"
                                     pdf_path = f"uploads/{pdf_filename}"
@@ -2372,20 +2452,26 @@ async def process_agentic_research(
                                     with open(pdf_path, 'wb') as f:
                                         f.write(response.content)
                                     
-                                    print(f"📄 Downloaded PDF: {pdf_filename}")
-                                    
-                                    # Process the PDF like a regular uploaded PDF
-                                    pdf_result = pdf_processor.process_pdf(pdf_path)
+                                    # Verify it's actually a PDF by checking magic bytes
+                                    if response.content[:4] == b'%PDF':
+                                        pdf_downloaded = True
+                                        print(f"   ✅ Successfully downloaded PDF from {pdf_source}: {pdf_filename} ({len(response.content)} bytes)")
+                                        
+                                        # Process the PDF like a regular uploaded PDF
+                                        pdf_result = pdf_processor.process_pdfs([pdf_path])[0]
                                     
                                     if pdf_result and not pdf_result.get("error"):
                                         # Update document with PDF filename
                                         doc.filename = pdf_filename
+                                        doc.file_path = pdf_path
                                         db.commit()
                                         
+                                        print(f"   📖 Extracting text from PDF...")
                                         # Process with NER (same aggressive filtering as regular PDFs)
                                         sentences = pdf_result.get("sentences", [])
                                         full_text = " ".join(sentences)
                                         
+                                        print(f"   🧬 Extracting entities and relationships...")
                                         # Use same NER pipeline as regular PDFs
                                         sentence_entities = ner_service.extract_entities_from_sentences(sentences)
                                         filtered_entities = ner_service.filter_entities(sentence_entities)
@@ -2394,6 +2480,7 @@ async def process_agentic_research(
                                         # Format entities for relationship extraction
                                         relationships = relationship_extractor.extract_all_relationships(filtered_entities)
                                         
+                                        print(f"   📊 Building knowledge graph...")
                                         # Build graph for this paper
                                         graph_data = graph_builder.build_graph(unique_entities, relationships)
                                         
@@ -2443,14 +2530,24 @@ async def process_agentic_research(
                                             entities=list(unique_entities.keys())
                                         )
                                         
-                                        print(f"✅ Processed PDF {i+1}: {paper.get('title', 'Unknown')[:50]}...")
+                                        print(f"   ✅ Successfully processed FULL PDF {i+1} from {pdf_source}: {len(graph_data.nodes)} entities, {len(graph_data.edges)} relationships")
                                         continue
+                                    else:
+                                        print(f"   ⚠️  PDF processing failed, falling back to abstract")
+                                else:
+                                    print(f"   ⚠️  Downloaded file is not a valid PDF, falling back to abstract")
+                                    # Clean up invalid file
+                                    import os
+                                    if os.path.exists(pdf_path):
+                                        os.remove(pdf_path)
                                         
                             except Exception as e:
-                                print(f"⚠️ Could not download PDF for paper {i+1}: {e}")
+                                print(f"   ⚠️  Could not download/process PDF for paper {i+1}: {e}")
+                                print(f"   📄 Falling back to abstract-only processing")
                         
                         # Fallback: Create text file if PDF download failed
-                        print(f"📄 Creating text file for paper {i+1} (PDF download failed)")
+                        if not pdf_downloaded:
+                            print(f"   📄 Processing abstract only for paper {i+1}")
                         text_content = f"{paper.get('title', '')}\n\n{paper.get('abstract', '')}"
                         
                         # Save as text file
@@ -2460,6 +2557,7 @@ async def process_agentic_research(
                         with open(text_file_path, 'w', encoding='utf-8') as f:
                             f.write(text_content)
                         
+                        print(f"   📖 Extracting entities from abstract...")
                         # Process with NER (same aggressive filtering as regular PDFs)
                         # Split text into sentences for proper NER processing
                         spacy_doc = ner_service.nlp(text_content)
@@ -2473,6 +2571,7 @@ async def process_agentic_research(
                         # Format entities for relationship extraction
                         relationships = relationship_extractor.extract_all_relationships(filtered_entities)
                         
+                        print(f"   📊 Building knowledge graph from abstract...")
                         # Build graph for this paper (same as regular PDFs)
                         graph_data = graph_builder.build_graph(unique_entities, relationships)
                         
@@ -2522,7 +2621,7 @@ async def process_agentic_research(
                             entities=list(unique_entities.keys())
                         )
                         
-                        print(f"✅ Processed text file {i+1}: {paper.get('title', 'Unknown')[:50]}...")
+                        print(f"   ✅ Successfully processed abstract {i+1}: {len(graph_data.nodes)} entities, {len(graph_data.edges)} relationships")
                         
                     except Exception as e:
                         print(f"❌ Error processing agentic paper {i+1}: {e}")
