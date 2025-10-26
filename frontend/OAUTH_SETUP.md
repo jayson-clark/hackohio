@@ -26,7 +26,7 @@ Create a `.env` file in the frontend directory with the following content:
 
 ```env
 # Google OAuth Configuration
-VITE_GOOGLE_CLIENT_ID=your_google_client_id_here
+VITE_GOOGLE_CLIENT_ID = 865286496790-ftmfmsu2uq8t1d4vf11fh44cp5v5u94i.apps.googleusercontent.com
 
 # API Configuration (optional, defaults to http://localhost:8000)
 VITE_API_URL=http://localhost:8000
